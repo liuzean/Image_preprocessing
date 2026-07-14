@@ -191,7 +191,8 @@ def process_dataset(
 
 
 def main() -> None:
-    dataset_dir = DEFAULT_DATASET_DIR
+    #dataset_dir = DEFAULT_DATASET_DIR
+    dataset_dir = ("E:\projects\datasets\Power_box\old")
     mask_config = ErodeMaskConfig(
         enabled=True,
         kernel_size=31,
@@ -201,7 +202,7 @@ def main() -> None:
     )
     background_config = BackgroundCorrectionConfig(
         enabled=True,
-        gaussian_kernel_size=151,
+        gaussian_kernel_size=101,
         sigma=0.0,
         division_epsilon=1e-6,
     )
