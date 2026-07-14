@@ -7,6 +7,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+#统一后续算法的数据格式并减少计算量。
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 

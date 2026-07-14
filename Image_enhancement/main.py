@@ -12,6 +12,9 @@ from Image_enhancement.scratch_detection.io.dataset import (
     read_image,
     scan_image_json_pairs,
 )
+from Image_enhancement.scratch_detection.modules.background import (
+    BackgroundCorrectionConfig,
+)
 from Image_enhancement.scratch_detection.modules.erode_mask import ErodeMaskConfig
 from Image_enhancement.scratch_detection.pipeline import ScratchDetectionPipeline
 
@@ -43,7 +46,16 @@ def main() -> None:
         kernel_shape="ellipse",
         mask_category="Silver box",
     )
-    pipeline = ScratchDetectionPipeline(erode_mask_config)
+    background_config = BackgroundCorrectionConfig(
+        enabled=True,
+        gaussian_kernel_size=151,
+        sigma=0.0,
+        division_epsilon=1e-6,
+    )
+    pipeline = ScratchDetectionPipeline(
+        erode_mask_config,
+        background_config,
+    )
 
     processed_count = run_pipeline(dataset_dir, pipeline)
     print(f"Pipeline processed {processed_count} images.")
