@@ -124,6 +124,7 @@ def ensure_odd_kernel_size(kernel_size: int) -> int:
 
 
 class EnhancementModule(Protocol):
+    enabled: bool
     name: str
 
     def apply(self, image_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -134,12 +135,16 @@ class EnhancementModule(Protocol):
 class LargeScaleGaussianBackgroundSubtraction:
     """Enhance local defects by subtracting a large-scale Gaussian background."""
 
+    enabled: bool = False
     gaussian_kernel_size: int = 151
     sigma: float = 0.0
     offset: float = 128.0
     name: str = "large_gaussian_background_subtraction"
 
     def apply(self, image_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        if not self.enabled:
+            return image_bgr.copy()
+
         kernel_size = ensure_odd_kernel_size(self.gaussian_kernel_size)
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
         background = cv2.GaussianBlur(gray, (kernel_size, kernel_size), self.sigma)
@@ -155,6 +160,7 @@ class LargeScaleGaussianBackgroundSubtraction:
 class MultiDirectionGaborLineEnhancement:
     """Enhance line-like scratches by taking the maximum response across Gabor directions."""
 
+    enabled: bool = True
     angles_degrees: list[float] = field(
         default_factory=lambda: [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165]
     )
@@ -166,6 +172,9 @@ class MultiDirectionGaborLineEnhancement:
     name: str = "multi_direction_gabor_line_enhancement"
 
     def apply(self, image_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        if not self.enabled:
+            return image_bgr.copy()
+
         kernel_size = ensure_odd_kernel_size(self.kernel_size)
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
         max_response = np.zeros_like(gray, dtype=np.float32)
@@ -204,15 +213,19 @@ class MultiDirectionGaborLineEnhancement:
 @dataclass
 class ScratchEnhancementPipeline:
     modules: list[EnhancementModule]
+    mask_erode_enabled: bool = True
     mask_erode_kernel_size: int = 31
     mask_erode_iterations: int = 1
 
     def process(self, image_bgr: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        processing_mask = erode_mask(
-            mask,
-            kernel_size=self.mask_erode_kernel_size,
-            iterations=self.mask_erode_iterations,
-        )
+        if self.mask_erode_enabled:
+            processing_mask = erode_mask(
+                mask,
+                kernel_size=self.mask_erode_kernel_size,
+                iterations=self.mask_erode_iterations,
+            )
+        else:
+            processing_mask = mask.copy()
 
         result = image_bgr.copy()
         for module in self.modules:
@@ -257,23 +270,32 @@ def process_folder(
     return count, output_dir
 
 
-def main(target_dir: Path, revised_content: str = "") -> None:
+def main(
+    target_dir: Path,
+    revised_content: str = "",
+    enable_mask_erode: bool = True,
+    enable_large_scale_gaussian_background_subtraction: bool = False,
+    enable_multi_direction_gabor_line_enhancement: bool = True,
+) -> None:
     pipeline = ScratchEnhancementPipeline(
         modules=[
             LargeScaleGaussianBackgroundSubtraction(
+                enabled=enable_large_scale_gaussian_background_subtraction,
                 gaussian_kernel_size=151,
                 sigma=0,
                 offset=128,
             ),
             MultiDirectionGaborLineEnhancement(
+                enabled=enable_multi_direction_gabor_line_enhancement,
                 angles_degrees=[0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165],
-                kernel_size=21,
+                kernel_size=31,
                 sigma=3.0,
                 wavelength=6.0,
                 gamma=0.5,
                 psi=0.0,
             )
         ],
+        mask_erode_enabled=enable_mask_erode,
         mask_erode_kernel_size=31,
         mask_erode_iterations=1,
     )
@@ -283,5 +305,14 @@ def main(target_dir: Path, revised_content: str = "") -> None:
 
 if __name__ == "__main__":
     target_dir = Path(r"E:\projects\datasets\Power_box\Power_box_3long")
-    Revised_content = "background_gabor"
-    main(target_dir, Revised_content)
+    Revised_content = "gabor"
+    enable_mask_erode = True
+    enable_large_scale_gaussian_background_subtraction = False
+    enable_multi_direction_gabor_line_enhancement = True
+    main(
+        target_dir,
+        Revised_content,
+        enable_mask_erode,
+        enable_large_scale_gaussian_background_subtraction,
+        enable_multi_direction_gabor_line_enhancement,
+    )
