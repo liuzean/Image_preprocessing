@@ -1,1 +1,54 @@
+from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from Image_enhancement.scratch_detection.io.dataset import (
+    DEFAULT_DATASET_DIR,
+    read_annotation,
+    read_image,
+    scan_image_json_pairs,
+)
+from Image_enhancement.scratch_detection.modules.erode_mask import ErodeMaskConfig
+from Image_enhancement.scratch_detection.pipeline import ScratchDetectionPipeline
+
+
+def run_pipeline(dataset_dir: Path, pipeline: ScratchDetectionPipeline) -> int:
+    scan_result = scan_image_json_pairs(dataset_dir)
+
+    processed_count = 0
+    for pair in scan_result.pairs:
+        image = read_image(pair.image_path)
+        annotation = read_annotation(pair.json_path)
+        pipeline.run(image, annotation)
+        processed_count += 1
+
+    if scan_result.images_without_json:
+        print("Skipped images without a same-name JSON file:")
+        for image_path in scan_result.images_without_json:
+            print(f"  {image_path.name}")
+
+    return processed_count
+
+
+def main() -> None:
+    dataset_dir = DEFAULT_DATASET_DIR
+    erode_mask_config = ErodeMaskConfig(
+        enabled=True,
+        kernel_size=31,
+        iterations=1,
+        kernel_shape="ellipse",
+        mask_category="Silver box",
+    )
+    pipeline = ScratchDetectionPipeline(erode_mask_config)
+
+    processed_count = run_pipeline(dataset_dir, pipeline)
+    print(f"Pipeline processed {processed_count} images.")
+    print("No final images were saved because later processing stages are not ready.")
+
+
+if __name__ == "__main__":
+    main()

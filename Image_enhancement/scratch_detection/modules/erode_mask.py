@@ -16,6 +16,10 @@ from Image_enhancement.scratch_detection.io.dataset import (  # noqa: E402
     read_image,
     scan_image_json_pairs,
 )
+from Image_enhancement.scratch_detection.io.result_writer import (  # noqa: E402
+    ResultWriter,
+    ResultWriterConfig,
+)
 
 
 KERNEL_SHAPES = {
@@ -33,7 +37,6 @@ class ErodeMaskConfig:
     iterations: int = 1
     kernel_shape: str = "ellipse"
     mask_category: str | None = "Silver box"
-    output_suffix: str = "_eroded_comparison.png"
 
     def validate(self) -> None:
         if self.kernel_size < 1 or self.kernel_size % 2 == 0:
@@ -43,8 +46,30 @@ class ErodeMaskConfig:
         if self.kernel_shape not in KERNEL_SHAPES:
             supported = ", ".join(KERNEL_SHAPES)
             raise ValueError(f"kernel_shape must be one of: {supported}")
-        if not self.output_suffix.lower().endswith(".png"):
-            raise ValueError("output_suffix must use the .png extension")
+
+
+@dataclass(frozen=True)
+class ErodeMaskPreviewConfig:
+    original_contour_color_bgr: tuple[int, int, int] = (0, 255, 0)
+    eroded_contour_color_bgr: tuple[int, int, int] = (0, 0, 255)
+    contour_thickness: int = 5
+
+    def validate(self) -> None:
+        if self.contour_thickness < 1:
+            raise ValueError("contour_thickness must be at least 1")
+        for color in (
+            self.original_contour_color_bgr,
+            self.eroded_contour_color_bgr,
+        ):
+            invalid_channel = any(channel < 0 or channel > 255 for channel in color)
+            if len(color) != 3 or invalid_channel:
+                raise ValueError("contour colors must contain three values from 0 to 255")
+
+
+@dataclass(frozen=True)
+class ErodeMaskResult:
+    original_mask: np.ndarray
+    eroded_mask: np.ndarray
 
 
 def extract_segmentations(
@@ -116,73 +141,124 @@ def apply_mask(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return masked_image
 
 
-def write_png(output_path: Path, image: np.ndarray) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    success, encoded = cv2.imencode(".png", image)
-    if not success:
-        raise ValueError(f"Failed to encode image: {output_path}")
-    encoded.tofile(str(output_path))
+def draw_mask_contours(
+    image: np.ndarray,
+    original_mask: np.ndarray,
+    eroded_mask: np.ndarray,
+    config: ErodeMaskPreviewConfig,
+) -> np.ndarray:
+    visualization = image.copy()
+    original_contours, _ = cv2.findContours(
+        original_mask.copy(),
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    eroded_contours, _ = cv2.findContours(
+        eroded_mask.copy(),
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
+    cv2.drawContours(
+        visualization,
+        original_contours,
+        contourIdx=-1,
+        color=config.original_contour_color_bgr,
+        thickness=config.contour_thickness,
+        lineType=cv2.LINE_AA,
+    )
+    cv2.drawContours(
+        visualization,
+        eroded_contours,
+        contourIdx=-1,
+        color=config.eroded_contour_color_bgr,
+        thickness=config.contour_thickness,
+        lineType=cv2.LINE_AA,
+    )
+    return visualization
 
 
-def create_next_output_dir(dataset_dir: Path) -> Path:
-    output_root = Path(dataset_dir) / "erode_mask_results"
-    output_root.mkdir(parents=True, exist_ok=True)
+def process_image(
+    image: np.ndarray,
+    annotation: dict,
+    config: ErodeMaskConfig,
+) -> ErodeMaskResult:
+    config.validate()
+    segmentations = extract_segmentations(annotation, config.mask_category)
+    original_mask = build_mask(image.shape, segmentations)
+    eroded_mask = erode_mask(original_mask, config)
+    return ErodeMaskResult(
+        original_mask=original_mask,
+        eroded_mask=eroded_mask,
+    )
 
-    numeric_indices = [
-        int(path.name)
-        for path in output_root.iterdir()
-        if path.is_dir() and path.name.isdigit()
-    ]
-    next_index = max(numeric_indices, default=0) + 1
-    if next_index > 999:
-        raise RuntimeError(
-            f"No output index is available: {output_root} has reached 999"
-        )
 
-    output_dir = output_root / f"{next_index:03d}"
-    output_dir.mkdir(parents=False, exist_ok=False)
-    return output_dir
+def create_preview_image(
+    image: np.ndarray,
+    result: ErodeMaskResult,
+    config: ErodeMaskPreviewConfig,
+) -> np.ndarray:
+    config.validate()
+    eroded_image = apply_mask(image, result.eroded_mask)
+    return draw_mask_contours(
+        eroded_image,
+        result.original_mask,
+        result.eroded_mask,
+        config,
+    )
 
 
 def process_dataset(
     dataset_dir: Path,
     config: ErodeMaskConfig,
+    preview_config: ErodeMaskPreviewConfig,
+    writer_config: ResultWriterConfig,
 ) -> tuple[int, list[Path], Path]:
     config.validate()
+    preview_config.validate()
     scan_result = scan_image_json_pairs(dataset_dir)
-    output_dir = create_next_output_dir(dataset_dir)
+    writer = ResultWriter(dataset_dir, writer_config)
 
     processed_count = 0
     for pair in scan_result.pairs:
         image = read_image(pair.image_path)
         annotation = read_annotation(pair.json_path)
-        segmentations = extract_segmentations(annotation, config.mask_category)
-        original_mask = build_mask(image.shape, segmentations)
-        processing_mask = erode_mask(original_mask, config)
-
-        eroded_image = apply_mask(image, processing_mask)
-        comparison = np.hstack((image, eroded_image))
-        output_path = output_dir / f"{pair.image_path.stem}{config.output_suffix}"
-        write_png(output_path, comparison)
+        result = process_image(image, annotation, config)
+        preview_image = create_preview_image(image, result, preview_config)
+        writer.save_result(pair.image_path.stem, image, preview_image)
         processed_count += 1
 
-    return processed_count, scan_result.images_without_json, output_dir
+    return processed_count, scan_result.images_without_json, writer.output_dir
 
 
 def main() -> None:
-    dataset_dir = DEFAULT_DATASET_DIR#DEFAULT_DATASET_DIR  #修改路径，例如：dataset_dir = Path(r"E:\projects\datasets\Power_box\Power_box_3long")
+    dataset_dir = DEFAULT_DATASET_DIR
     config = ErodeMaskConfig(
         enabled=True,
         kernel_size=31,
         iterations=1,
         kernel_shape="ellipse",
         mask_category="Silver box",
-        output_suffix="_eroded_comparison.png",
+    )
+    preview_config = ErodeMaskPreviewConfig(
+        original_contour_color_bgr=(0, 255, 0),
+        eroded_contour_color_bgr=(0, 0, 255),
+        contour_thickness=5,
+    )
+    writer_config = ResultWriterConfig(
+        output_folder_name="erode_mask_results",
+        run_number_width=3,
+        max_run_number=999,
+        save_comparison=True,
+        save_processed=False,
+        comparison_suffix="_eroded_comparison.png",
     )
 
     processed_count, images_without_json, output_dir = process_dataset(
         dataset_dir,
         config,
+        preview_config,
+        writer_config,
     )
     print(f"Processed {processed_count} images. Results saved to: {output_dir}")
 
