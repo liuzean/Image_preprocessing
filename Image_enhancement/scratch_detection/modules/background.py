@@ -34,7 +34,7 @@ from Image_enhancement.scratch_detection.modules.grayscale import (  # noqa: E40
 @dataclass(frozen=True)
 class BackgroundCorrectionConfig:
     enabled: bool = True
-    gaussian_kernel_size: int = 151
+    gaussian_kernel_size: int = 31
     sigma: float = 0.0
     division_epsilon: float = 1e-6
 
@@ -152,6 +152,18 @@ def create_corrected_preview(
     return cv2.cvtColor(preview, cv2.COLOR_GRAY2BGR)
 
 
+def create_parameter_record_dir(
+    output_dir: Path,
+    config: BackgroundCorrectionConfig,
+) -> Path:
+    config.validate()
+    parameter_dir = output_dir / (
+        f"kernel_size={config.gaussian_kernel_size},sigma={config.sigma}"
+    )
+    parameter_dir.mkdir(parents=False, exist_ok=False)
+    return parameter_dir
+
+
 def process_dataset(
     dataset_dir: Path,
     mask_config: ErodeMaskConfig,
@@ -162,6 +174,7 @@ def process_dataset(
     scan_result = scan_image_json_pairs(dataset_dir)
     preview_config.validate()
     writer = ResultWriter(dataset_dir, writer_config)
+    create_parameter_record_dir(writer.output_dir, background_config)
 
     processed_count = 0
     for pair in scan_result.pairs:
@@ -220,12 +233,7 @@ def main() -> None:
         kernel_shape="ellipse",
         mask_category="Silver box",
     )
-    background_config = BackgroundCorrectionConfig(
-        enabled=True,
-        gaussian_kernel_size=101,
-        sigma=0.0,
-        division_epsilon=1e-6,
-    )
+    background_config = BackgroundCorrectionConfig()
     preview_config = BackgroundPreviewConfig(
         residual_offset=128.0,
         crop_padding=15,

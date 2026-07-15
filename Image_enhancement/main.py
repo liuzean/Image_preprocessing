@@ -51,7 +51,7 @@ def main() -> None:
     )
     background_config = BackgroundCorrectionConfig(
         enabled=True,
-        gaussian_kernel_size=151,
+        gaussian_kernel_size=101,
         sigma=0.0,
         division_epsilon=1e-6,
     )

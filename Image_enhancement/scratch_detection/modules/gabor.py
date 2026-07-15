@@ -34,7 +34,7 @@ from Image_enhancement.scratch_detection.modules.grayscale import (  # noqa: E40
 )
 
 
-RESPONSE_MODES = {"absolute", "positive", "negative"}
+RESPONSE_MODES = {"absolute", "positive", "negative"}  #absolute:同一张图片中同时有亮划痕和暗划痕,positive:只保留亮划痕,negative:只保留暗划痕
 
 
 @dataclass(frozen=True)
@@ -205,6 +205,21 @@ def create_response_preview(
     return cv2.cvtColor(preview, cv2.COLOR_GRAY2BGR)
 
 
+def create_parameter_record_dir(
+    output_dir: Path,
+    config: MultiDirectionGaborConfig,
+) -> Path:
+    config.validate()
+    parameter_dir = output_dir / (
+        f"kernel_size={config.kernel_size},"
+        f"sigma={config.sigma},"
+        f"wavelength={config.wavelength},"
+        f"gamma={config.gamma}"
+    )
+    parameter_dir.mkdir(parents=False, exist_ok=False)
+    return parameter_dir
+
+
 def process_dataset(
     dataset_dir: Path,
     mask_config: ErodeMaskConfig,
@@ -215,6 +230,7 @@ def process_dataset(
 ) -> tuple[int, list[Path], Path]:
     scan_result = scan_image_json_pairs(dataset_dir)
     writer = ResultWriter(dataset_dir, writer_config)
+    create_parameter_record_dir(writer.output_dir, gabor_config)
 
     processed_count = 0
     for pair in scan_result.pairs:
@@ -254,7 +270,7 @@ def process_dataset(
 
 
 def main() -> None:
-    dataset_dir = DEFAULT_DATASET_DIR
+    dataset_dir = Path(r"E:\projects\datasets\Power_box\old")
     mask_config = ErodeMaskConfig(
         enabled=True,
         kernel_size=31,
@@ -271,9 +287,9 @@ def main() -> None:
     gabor_config = MultiDirectionGaborConfig(
         enabled=True,
         angles_degrees=(0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165),
-        kernel_size=31,
+        kernel_size=41,
         sigma=3.0,
-        wavelength=6.0,
+        wavelength=10.0,
         gamma=0.5,
         psi=0.0,
         response_mode="absolute",
