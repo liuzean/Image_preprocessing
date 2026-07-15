@@ -76,6 +76,38 @@ def write_image(output_path: Path, image: np.ndarray) -> None:
     encoded.tofile(str(output_path))
 
 
+def crop_images_to_mask_bounding_rect(
+    mask: np.ndarray,
+    *images: np.ndarray,
+    padding: int = 15,
+) -> tuple[np.ndarray, ...]:
+    """Crop images to the mask bounding rectangle plus padding."""
+    if mask.ndim != 2:
+        raise ValueError("mask must be a one-channel image")
+    if not isinstance(padding, int) or padding < 0:
+        raise ValueError("padding must be a non-negative integer")
+
+    mask_uint8 = np.where(mask > 0, 255, 0).astype(np.uint8)
+    if not np.any(mask_uint8):
+        raise ValueError("mask must contain at least one foreground pixel")
+
+    image_height, image_width = mask.shape
+    for image in images:
+        if image.shape[:2] != (image_height, image_width):
+            raise ValueError("every image must have the same size as the mask")
+
+    x, y, width, height = cv2.boundingRect(mask_uint8)
+    x_start = max(0, x - padding)
+    y_start = max(0, y - padding)
+    x_end = min(image_width, x + width + padding)
+    y_end = min(image_height, y + height + padding)
+
+    return tuple(
+        image[y_start:y_end, x_start:x_end].copy()
+        for image in images
+    )
+
+
 class ResultWriter:
     """Create one numbered run directory and save final pipeline images."""
 

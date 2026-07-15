@@ -19,6 +19,7 @@ from Image_enhancement.scratch_detection.io.dataset import (  # noqa: E402
 from Image_enhancement.scratch_detection.io.result_writer import (  # noqa: E402
     ResultWriter,
     ResultWriterConfig,
+    crop_images_to_mask_bounding_rect,
 )
 
 
@@ -53,10 +54,13 @@ class ErodeMaskPreviewConfig:
     original_contour_color_bgr: tuple[int, int, int] = (0, 255, 0)
     eroded_contour_color_bgr: tuple[int, int, int] = (0, 0, 255)
     contour_thickness: int = 5
+    crop_padding: int = 15
 
     def validate(self) -> None:
         if self.contour_thickness < 1:
             raise ValueError("contour_thickness must be at least 1")
+        if not isinstance(self.crop_padding, int) or self.crop_padding < 0:
+            raise ValueError("crop_padding must be a non-negative integer")
         for color in (
             self.original_contour_color_bgr,
             self.eroded_contour_color_bgr,
@@ -225,7 +229,17 @@ def process_dataset(
         annotation = read_annotation(pair.json_path)
         result = process_image(image, annotation, config)
         preview_image = create_preview_image(image, result, preview_config)
-        writer.save_result(pair.image_path.stem, image, preview_image)
+        cropped_image, cropped_preview = crop_images_to_mask_bounding_rect(
+            result.original_mask,
+            image,
+            preview_image,
+            padding=preview_config.crop_padding,
+        )
+        writer.save_result(
+            pair.image_path.stem,
+            cropped_image,
+            cropped_preview,
+        )
         processed_count += 1
 
     return processed_count, scan_result.images_without_json, writer.output_dir
@@ -244,6 +258,7 @@ def main() -> None:
         original_contour_color_bgr=(0, 255, 0),
         eroded_contour_color_bgr=(0, 0, 255),
         contour_thickness=5,
+        crop_padding=15,
     )
     writer_config = ResultWriterConfig(
         output_folder_name="erode_mask_results",

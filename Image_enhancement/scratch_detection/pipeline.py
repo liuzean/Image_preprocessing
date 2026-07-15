@@ -15,6 +15,10 @@ from Image_enhancement.scratch_detection.modules.erode_mask import (
 from Image_enhancement.scratch_detection.modules.grayscale import (
     convert_to_grayscale_float32,
 )
+from Image_enhancement.scratch_detection.modules.gabor import (
+    MultiDirectionGaborConfig,
+    enhance_multi_direction_gabor,
+)
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,9 @@ class ScratchPipelineResult:
     working_image: np.ndarray
     grayscale_image: np.ndarray
     background_image: np.ndarray
+    gabor_response_image: np.ndarray
+    gabor_signed_response_image: np.ndarray
+    gabor_direction_map_degrees: np.ndarray
     original_mask: np.ndarray
     processing_mask: np.ndarray
 
@@ -33,9 +40,11 @@ class ScratchDetectionPipeline:
         self,
         erode_mask_config: ErodeMaskConfig,
         background_config: BackgroundCorrectionConfig,
+        gabor_config: MultiDirectionGaborConfig,
     ) -> None:
         self.erode_mask_config = erode_mask_config
         self.background_config = background_config
+        self.gabor_config = gabor_config
 
     def run(
         self,
@@ -60,10 +69,18 @@ class ScratchDetectionPipeline:
             mask_result.original_mask,
             self.background_config,
         )
+        gabor_result = enhance_multi_direction_gabor(
+            background_result.corrected_image,
+            mask_result.eroded_mask,
+            self.gabor_config,
+        )
         return ScratchPipelineResult(
-            working_image=background_result.corrected_image,
+            working_image=gabor_result.response_image,
             grayscale_image=grayscale_result.image,
             background_image=background_result.background_image,
+            gabor_response_image=gabor_result.response_image,
+            gabor_signed_response_image=gabor_result.signed_response_image,
+            gabor_direction_map_degrees=gabor_result.direction_map_degrees,
             original_mask=mask_result.original_mask,
             processing_mask=mask_result.eroded_mask,
         )

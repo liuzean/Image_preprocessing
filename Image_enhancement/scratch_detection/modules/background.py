@@ -19,6 +19,7 @@ from Image_enhancement.scratch_detection.io.dataset import (  # noqa: E402
 from Image_enhancement.scratch_detection.io.result_writer import (  # noqa: E402
     ResultWriter,
     ResultWriterConfig,
+    crop_images_to_mask_bounding_rect,
     write_image,
 )
 from Image_enhancement.scratch_detection.modules.erode_mask import (  # noqa: E402
@@ -55,6 +56,13 @@ class BackgroundCorrectionResult:
 @dataclass(frozen=True)
 class BackgroundPreviewConfig:
     residual_offset: float = 128.0
+    crop_padding: int = 15
+
+    def validate(self) -> None:
+        if not np.isfinite(self.residual_offset):
+            raise ValueError("residual_offset must be finite")
+        if not isinstance(self.crop_padding, int) or self.crop_padding < 0:
+            raise ValueError("crop_padding must be a non-negative integer")
 
 
 def subtract_mask_aware_gaussian_background(
@@ -136,6 +144,7 @@ def create_corrected_preview(
     display_mask: np.ndarray,
     config: BackgroundPreviewConfig,
 ) -> np.ndarray:
+    config.validate()
     preview = np.zeros_like(corrected_image, dtype=np.uint8)
     mask_pixels = display_mask > 0
     shifted = corrected_image[mask_pixels] + config.residual_offset
@@ -151,6 +160,7 @@ def process_dataset(
     writer_config: ResultWriterConfig,
 ) -> tuple[int, list[Path], Path]:
     scan_result = scan_image_json_pairs(dataset_dir)
+    preview_config.validate()
     writer = ResultWriter(dataset_dir, writer_config)
 
     processed_count = 0
@@ -170,20 +180,30 @@ def process_dataset(
             mask_result.eroded_mask,
             preview_config,
         )
-        writer.save_result(
-            pair.image_path.stem,
-            original_image,
-            corrected_preview,
-        )
-
         background_preview = create_background_preview(
             background_result.background_image,
             mask_result.eroded_mask,
         )
+        (
+            cropped_original,
+            cropped_corrected,
+            cropped_background,
+        ) = crop_images_to_mask_bounding_rect(
+            mask_result.original_mask,
+            original_image,
+            corrected_preview,
+            background_preview,
+            padding=preview_config.crop_padding,
+        )
+        writer.save_result(
+            pair.image_path.stem,
+            cropped_original,
+            cropped_corrected,
+        )
         write_image(
             writer.output_dir
             / f"{pair.image_path.stem}_estimated_background.png",
-            background_preview,
+            cropped_background,
         )
         processed_count += 1
 
@@ -206,7 +226,10 @@ def main() -> None:
         sigma=0.0,
         division_epsilon=1e-6,
     )
-    preview_config = BackgroundPreviewConfig(residual_offset=128.0)
+    preview_config = BackgroundPreviewConfig(
+        residual_offset=128.0,
+        crop_padding=15,
+    )
     writer_config = ResultWriterConfig(
         output_folder_name="background_results",
         run_number_width=3,
