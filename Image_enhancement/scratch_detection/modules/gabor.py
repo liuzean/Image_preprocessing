@@ -287,9 +287,9 @@ def main() -> None:
     gabor_config = MultiDirectionGaborConfig(
         enabled=True,
         angles_degrees=(0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165),
-        kernel_size=41,
-        sigma=3.0,
-        wavelength=10.0,
+        kernel_size=31,
+        sigma=5.0,
+        wavelength=12.0,
         gamma=0.5,
         psi=0.0,
         response_mode="absolute",
@@ -324,6 +324,8 @@ def main() -> None:
         print("Skipped images without a same-name JSON file:")
         for image_path in images_without_json:
             print(f"  {image_path.name}")
+
+#根据测试结果，增大wavelength，测了6,8,10,12,14，花纹会被明显减弱，但还是会存在，数值达到12的时候，较浅的划痕会开始变淡，但相对深一点的还是差不多。***kernel\_size的数值测了31,41,51差别都不大。sigma测了3,4,5.花纹变化不大，但5的话深的和浅的划痕会变淡。gamma测了0.5,0.4,0.30，差异都不大***，最好的参数为kernel_size=31, sigma=3.0, wavelength=10.0, gamma=0.5, psi=0.0, response_mode="absolute", normalize_kernel_l2=True
 
 
 if __name__ == "__main__":
