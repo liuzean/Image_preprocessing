@@ -129,21 +129,21 @@ def apply_masked_hysteresis_threshold(
     )
 
 
-def create_parameter_record_dir(
+def _create_parameter_record_dir(
     output_dir: Path,
     config: HysteresisThresholdConfig,
 ) -> Path:
     config.validate()
     parameter_dir = output_dir / (
         f"high_percentile={config.high_percentile},"
-        f"low_ratio={config.low_threshold_ratio},"
+        f"low_threshold_ratio={config.low_threshold_ratio},"
         f"connectivity={config.connectivity}"
     )
     parameter_dir.mkdir(parents=False, exist_ok=False)
     return parameter_dir
 
 
-def process_dataset(
+def _run_standalone_dataset(
     dataset_dir: Path,
     mask_config: ErodeMaskConfig,
     background_config: BackgroundCorrectionConfig,
@@ -152,9 +152,10 @@ def process_dataset(
     preview_config: FrangiPreviewConfig,
     writer_config: ResultWriterConfig,
 ) -> tuple[int, list[Path], Path]:
+    """Run the image-writing preview workflow for this module's main entry."""
     scan_result = scan_image_json_pairs(dataset_dir)
     writer = ResultWriter(dataset_dir, writer_config)
-    create_parameter_record_dir(writer.output_dir, threshold_config)
+    _create_parameter_record_dir(writer.output_dir, threshold_config)
 
     processed_count = 0
     for pair in scan_result.pairs:
@@ -242,9 +243,9 @@ def main() -> None:
     )
     threshold_config = HysteresisThresholdConfig(
         enabled=True,
-        high_percentile=99.5,
-        low_threshold_ratio=0.4,
-        connectivity=8,
+        high_percentile=97.5,     #在 Mask 内的 Frangi bright 响应中计算高阈值。，增大：强种子更少，误检减少，但浅划痕可能没有种子。，减小：保留更多浅划痕，但银漆纹理也会增加。
+        low_threshold_ratio=0.6,    #低阈值与高阈值的比例：，增大：筛选更严格，纹理减少，但划痕更容易断裂。减小：可以连接划痕的浅色部分，但会带入更多纹理。，
+        connectivity=8,  #8：水平、垂直、斜向都视为连通，适合多方向划痕，4：只允许水平和垂直连通，筛选更严格，但斜划痕容易断裂。
     )
     preview_config = FrangiPreviewConfig(
         lower_percentile=0.0,
@@ -261,7 +262,7 @@ def main() -> None:
         processed_suffix="_threshold_binary.png",
     )
 
-    processed_count, images_without_json, output_dir = process_dataset(
+    processed_count, images_without_json, output_dir = _run_standalone_dataset(
         dataset_dir,
         mask_config,
         background_config,

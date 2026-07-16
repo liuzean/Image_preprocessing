@@ -20,6 +20,9 @@ from Image_enhancement.scratch_detection.modules.gabor import (
     MultiDirectionGaborConfig,
 )
 from Image_enhancement.scratch_detection.modules.frangi import FrangiConfig
+from Image_enhancement.scratch_detection.modules.threshold import (
+    HysteresisThresholdConfig,
+)
 from Image_enhancement.scratch_detection.pipeline import ScratchDetectionPipeline
 
 
@@ -81,11 +84,18 @@ def main() -> None:
         boundary_mode="reflect",
         constant_value=0.0,
     )
+    threshold_config = HysteresisThresholdConfig(
+        enabled=True,
+        high_percentile=97.5,
+        low_threshold_ratio=0.4,
+        connectivity=8,
+    )
     pipeline = ScratchDetectionPipeline(
         erode_mask_config,
         background_config,
         gabor_config,
         frangi_config,
+        threshold_config,
         line_enhancement_method=line_enhancement_method,
         frangi_response_mode=frangi_response_mode,
     )

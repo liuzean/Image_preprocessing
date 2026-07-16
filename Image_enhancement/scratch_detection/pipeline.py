@@ -23,6 +23,10 @@ from Image_enhancement.scratch_detection.modules.frangi import (
     FrangiConfig,
     enhance_frangi,
 )
+from Image_enhancement.scratch_detection.modules.threshold import (
+    HysteresisThresholdConfig,
+    apply_masked_hysteresis_threshold,
+)
 
 
 LINE_ENHANCEMENT_METHODS = {"frangi", "gabor"}
@@ -32,6 +36,10 @@ FRANGI_RESPONSE_MODES = {"bright", "dark", "combined"}
 @dataclass(frozen=True)
 class ScratchPipelineResult:
     working_image: np.ndarray
+    line_response_image: np.ndarray
+    threshold_binary_image: np.ndarray
+    threshold_low_value: float
+    threshold_high_value: float
     line_enhancement_method: str
     grayscale_image: np.ndarray
     background_image: np.ndarray
@@ -54,6 +62,7 @@ class ScratchDetectionPipeline:
         background_config: BackgroundCorrectionConfig,
         gabor_config: MultiDirectionGaborConfig,
         frangi_config: FrangiConfig,
+        threshold_config: HysteresisThresholdConfig,
         line_enhancement_method: str = "frangi",
         frangi_response_mode: str = "bright",
     ) -> None:
@@ -70,6 +79,7 @@ class ScratchDetectionPipeline:
         self.background_config = background_config
         self.gabor_config = gabor_config
         self.frangi_config = frangi_config
+        self.threshold_config = threshold_config
         self.line_enhancement_method = line_enhancement_method
         self.frangi_response_mode = frangi_response_mode
 
@@ -104,7 +114,7 @@ class ScratchDetectionPipeline:
                 mask_result.eroded_mask,
                 self.gabor_config,
             )
-            working_image = gabor_result.response_image
+            line_response_image = gabor_result.response_image
         else:
             frangi_result = enhance_frangi(
                 background_result.corrected_image,
@@ -112,16 +122,26 @@ class ScratchDetectionPipeline:
                 self.frangi_config,
             )
             if not self.frangi_config.enabled:
-                working_image = frangi_result.response_image
+                line_response_image = frangi_result.response_image
             elif self.frangi_response_mode == "bright":
-                working_image = frangi_result.bright_response_image
+                line_response_image = frangi_result.bright_response_image
             elif self.frangi_response_mode == "dark":
-                working_image = frangi_result.dark_response_image
+                line_response_image = frangi_result.dark_response_image
             else:
-                working_image = frangi_result.response_image
+                line_response_image = frangi_result.response_image
+
+        threshold_result = apply_masked_hysteresis_threshold(
+            line_response_image,
+            mask_result.eroded_mask,
+            self.threshold_config,
+        )
 
         return ScratchPipelineResult(
-            working_image=working_image,
+            working_image=threshold_result.binary_image,
+            line_response_image=line_response_image,
+            threshold_binary_image=threshold_result.binary_image,
+            threshold_low_value=threshold_result.low_threshold,
+            threshold_high_value=threshold_result.high_threshold,
             line_enhancement_method=self.line_enhancement_method,
             grayscale_image=grayscale_result.image,
             background_image=background_result.background_image,
