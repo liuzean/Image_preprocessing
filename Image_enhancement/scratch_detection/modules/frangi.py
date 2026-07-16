@@ -320,10 +320,10 @@ def main() -> None:
     )
     frangi_config = FrangiConfig(
         enabled=True,
-        sigmas=(1.0, 2.0, 3.0, 4.0, 5.0),
-        alpha=0.5,
-        beta=0.5,
-        gamma=None,
+        sigmas=(2.5,3),   #表示检测尺度,尺度越多，适应的划痕宽度越广,sigmas越大，检测的划痕越宽，sigmas越小，检测的划痕越窄
+        alpha=0.5,        #用于三维图像
+        beta=0.2,         #控制“线状结构”和“圆形/块状结构”的区分强度。越小倾向于细长线状，越大，限制越小，弱划痕更容易保留，但纹理和斑点，圆形/块状结构也可能增加。
+        gamma=None,        #控制对结构强度的敏感性，越小，弱划痕容易出现，但噪声和纹理也更多；越大，只保留较强结构，浅划痕可能消失；
         detect_bright_ridges=True,
         detect_dark_ridges=True,
         boundary_mode="reflect",

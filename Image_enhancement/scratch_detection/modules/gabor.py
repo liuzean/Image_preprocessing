@@ -288,7 +288,7 @@ def main() -> None:
         enabled=True,
         angles_degrees=(0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165),
         kernel_size=31,
-        sigma=5.0,
+        sigma=2.0,
         wavelength=12.0,
         gamma=0.5,
         psi=0.0,

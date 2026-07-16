@@ -19,6 +19,7 @@ from Image_enhancement.scratch_detection.modules.erode_mask import ErodeMaskConf
 from Image_enhancement.scratch_detection.modules.gabor import (
     MultiDirectionGaborConfig,
 )
+from Image_enhancement.scratch_detection.modules.frangi import FrangiConfig
 from Image_enhancement.scratch_detection.pipeline import ScratchDetectionPipeline
 
 
@@ -42,6 +43,9 @@ def run_pipeline(dataset_dir: Path, pipeline: ScratchDetectionPipeline) -> int:
 
 def main() -> None:
     dataset_dir = DEFAULT_DATASET_DIR
+    line_enhancement_method = "frangi"
+    frangi_response_mode = "bright"
+
     erode_mask_config = ErodeMaskConfig(
         enabled=True,
         kernel_size=31,
@@ -51,7 +55,7 @@ def main() -> None:
     )
     background_config = BackgroundCorrectionConfig(
         enabled=True,
-        gaussian_kernel_size=101,
+        gaussian_kernel_size=151,
         sigma=0.0,
         division_epsilon=1e-6,
     )
@@ -66,14 +70,31 @@ def main() -> None:
         response_mode="absolute",
         normalize_kernel_l2=True,
     )
+    frangi_config = FrangiConfig(
+        enabled=True,
+        sigmas=(2.5, 3.0),
+        alpha=0.5,
+        beta=0.2,
+        gamma=None,
+        detect_bright_ridges=True,
+        detect_dark_ridges=True,
+        boundary_mode="reflect",
+        constant_value=0.0,
+    )
     pipeline = ScratchDetectionPipeline(
         erode_mask_config,
         background_config,
         gabor_config,
+        frangi_config,
+        line_enhancement_method=line_enhancement_method,
+        frangi_response_mode=frangi_response_mode,
     )
 
     processed_count = run_pipeline(dataset_dir, pipeline)
-    print(f"Pipeline processed {processed_count} images.")
+    print(
+        f"Pipeline processed {processed_count} images with "
+        f"{line_enhancement_method}."
+    )
     print("No final images were saved because later processing stages are not ready.")
 
 
