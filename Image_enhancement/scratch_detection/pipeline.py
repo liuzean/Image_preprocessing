@@ -27,6 +27,10 @@ from Image_enhancement.scratch_detection.modules.threshold import (
     HysteresisThresholdConfig,
     apply_masked_hysteresis_threshold,
 )
+from Image_enhancement.scratch_detection.modules.morphology import (
+    SkeletonizationConfig,
+    skeletonize_binary_candidates,
+)
 
 
 LINE_ENHANCEMENT_METHODS = {"frangi", "gabor"}
@@ -40,6 +44,9 @@ class ScratchPipelineResult:
     threshold_binary_image: np.ndarray
     threshold_low_value: float
     threshold_high_value: float
+    skeleton_image: np.ndarray
+    morphology_foreground_pixel_count: int
+    morphology_skeleton_pixel_count: int
     line_enhancement_method: str
     grayscale_image: np.ndarray
     background_image: np.ndarray
@@ -63,6 +70,7 @@ class ScratchDetectionPipeline:
         gabor_config: MultiDirectionGaborConfig,
         frangi_config: FrangiConfig,
         threshold_config: HysteresisThresholdConfig,
+        skeleton_config: SkeletonizationConfig,
         line_enhancement_method: str = "frangi",
         frangi_response_mode: str = "bright",
     ) -> None:
@@ -80,6 +88,7 @@ class ScratchDetectionPipeline:
         self.gabor_config = gabor_config
         self.frangi_config = frangi_config
         self.threshold_config = threshold_config
+        self.skeleton_config = skeleton_config
         self.line_enhancement_method = line_enhancement_method
         self.frangi_response_mode = frangi_response_mode
 
@@ -135,13 +144,23 @@ class ScratchDetectionPipeline:
             mask_result.eroded_mask,
             self.threshold_config,
         )
+        skeleton_result = skeletonize_binary_candidates(
+            threshold_result.binary_image,
+            mask_result.eroded_mask,
+            self.skeleton_config,
+        )
 
         return ScratchPipelineResult(
-            working_image=threshold_result.binary_image,
+            working_image=skeleton_result.skeleton_image,
             line_response_image=line_response_image,
             threshold_binary_image=threshold_result.binary_image,
             threshold_low_value=threshold_result.low_threshold,
             threshold_high_value=threshold_result.high_threshold,
+            skeleton_image=skeleton_result.skeleton_image,
+            morphology_foreground_pixel_count=(
+                skeleton_result.foreground_pixel_count
+            ),
+            morphology_skeleton_pixel_count=skeleton_result.skeleton_pixel_count,
             line_enhancement_method=self.line_enhancement_method,
             grayscale_image=grayscale_result.image,
             background_image=background_result.background_image,

@@ -23,6 +23,9 @@ from Image_enhancement.scratch_detection.modules.frangi import FrangiConfig
 from Image_enhancement.scratch_detection.modules.threshold import (
     HysteresisThresholdConfig,
 )
+from Image_enhancement.scratch_detection.modules.morphology import (
+    SkeletonizationConfig,
+)
 from Image_enhancement.scratch_detection.pipeline import ScratchDetectionPipeline
 
 
@@ -75,7 +78,7 @@ def main() -> None:
     )
     frangi_config = FrangiConfig(
         enabled=True,
-        sigmas=(2.5, 3.0),
+        sigmas=(2.0, 2.5),
         alpha=0.5,
         beta=0.2,
         gamma=None,
@@ -86,9 +89,13 @@ def main() -> None:
     )
     threshold_config = HysteresisThresholdConfig(
         enabled=True,
-        high_percentile=97.5,
+        high_percentile=97.0,
         low_threshold_ratio=0.4,
         connectivity=8,
+    )
+    skeleton_config = SkeletonizationConfig(
+        enabled=True,
+        method="zhang",
     )
     pipeline = ScratchDetectionPipeline(
         erode_mask_config,
@@ -96,6 +103,7 @@ def main() -> None:
         gabor_config,
         frangi_config,
         threshold_config,
+        skeleton_config,
         line_enhancement_method=line_enhancement_method,
         frangi_response_mode=frangi_response_mode,
     )

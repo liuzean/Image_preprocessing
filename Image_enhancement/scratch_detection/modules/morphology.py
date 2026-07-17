@@ -8,6 +8,9 @@ import cv2
 import numpy as np
 from skimage.morphology import skeletonize
 
+#目的不是增强划痕或删除花纹，而是为了后续准确计算：骨架长度，最长路径，端点位置，局部方向，分支点数量，方向连续性
+
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -271,13 +274,13 @@ def main() -> None:
         low_threshold_ratio=0.4,
         connectivity=8,
     )
-    skeleton_config = SkeletonizationConfig(
+    skeleton_config = SkeletonizationConfig(    #这也是该模块的参数
         enabled=True,
         method="zhang",
     )
-    preview_config = MorphologyPreviewConfig(
+    preview_config = MorphologyPreviewConfig(    #这也是该模块的参数
         crop_padding=15,
-        skeleton_preview_thickness=3,
+        skeleton_preview_thickness=1,           #只将三联图中的骨架临时加粗，便于肉眼观察。必须是正奇数
     )
     writer_config = ResultWriterConfig(
         output_folder_name="morphology_results",

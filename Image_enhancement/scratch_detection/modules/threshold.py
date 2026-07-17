@@ -232,9 +232,9 @@ def main() -> None:
     )
     frangi_config = FrangiConfig(
         enabled=True,
-        sigmas=(2.5, 3.0),
+        sigmas=(2.0,2.5, 3.0),
         alpha=0.5,
-        beta=0.2,
+        beta=0.3,
         gamma=None,
         detect_bright_ridges=True,
         detect_dark_ridges=False,
@@ -243,8 +243,8 @@ def main() -> None:
     )
     threshold_config = HysteresisThresholdConfig(
         enabled=True,
-        high_percentile=97.5,     #在 Mask 内的 Frangi bright 响应中计算高阈值。，增大：强种子更少，误检减少，但浅划痕可能没有种子。，减小：保留更多浅划痕，但银漆纹理也会增加。
-        low_threshold_ratio=0.6,    #低阈值与高阈值的比例：，增大：筛选更严格，纹理减少，但划痕更容易断裂。减小：可以连接划痕的浅色部分，但会带入更多纹理。，
+        high_percentile=97.0,     #在 Mask 内的 Frangi bright 响应中计算高阈值。，增大：强种子更少，误检减少，但浅划痕可能没有种子。，减小：保留更多浅划痕，但银漆纹理也会增加。
+        low_threshold_ratio=0.4,    #低阈值与高阈值的比例：，增大：筛选更严格，纹理减少，但划痕更容易断裂。减小：可以连接划痕的浅色部分，但会带入更多纹理。，
         connectivity=8,  #8：水平、垂直、斜向都视为连通，适合多方向划痕，4：只允许水平和垂直连通，筛选更严格，但斜划痕容易断裂。
     )
     preview_config = FrangiPreviewConfig(
