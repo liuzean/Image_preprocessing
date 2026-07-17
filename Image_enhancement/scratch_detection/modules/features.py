@@ -8,6 +8,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+#对阈值分割得到的每个白色连通区域进行测量，生成可供后续划痕筛选使用的特征数据
+
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -614,7 +616,7 @@ def main() -> None:
     feature_config = FeatureExtractionConfig(
         enabled=True,
         connectivity=8,
-        minimum_component_area=5,      #面积小于该值的区域不写入特征记录。
+        minimum_component_area=50,      #面积小于该值的区域不写入特征记录。
         calculate_width_features=True,       #使用阈值二值图和距离变换计算平均、最大宽度。
         calculate_response_features=True,       #统计连通域内 Frangi/Gabor 的平均响应、最大响应和强响应比例。
     )
