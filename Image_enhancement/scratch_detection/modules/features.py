@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import heapq
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -109,6 +110,16 @@ class ComponentFeatures:
     aspect_ratio: float
     skeleton_pixel_count: int
     skeleton_length_pixels: float
+    skeleton_rotated_length_pixels: float
+    skeleton_rotated_width_pixels: float
+    skeleton_aspect_ratio: float
+    longest_path_length_pixels: float
+    longest_path_rotated_length_pixels: float
+    longest_path_rotated_width_pixels: float
+    longest_path_aspect_ratio: float
+    longest_path_linearity: float
+    branch_density: float
+    path_coverage: float
     endpoint_count: int
     branch_point_count: int
     orientation_degrees: float | None
@@ -119,6 +130,7 @@ class ComponentFeatures:
     max_response: float | None
     strong_response_fraction: float | None
     endpoint_coordinates_xy: tuple[tuple[int, int], ...]
+    longest_path_coordinates_xy: tuple[tuple[int, int], ...]
 
 
 @dataclass(frozen=True)
@@ -126,6 +138,7 @@ class FeatureExtractionResult:
     features: tuple[ComponentFeatures, ...]
     component_labels: np.ndarray
     retained_component_mask: np.ndarray
+    longest_path_mask: np.ndarray
     endpoint_mask: np.ndarray
     branch_point_mask: np.ndarray
 
@@ -153,6 +166,149 @@ def _skeleton_graph_length(skeleton_pixels: np.ndarray) -> float:
         + vertical_edges
         + (np.sqrt(2.0) * diagonal_edges)
     )
+
+
+def _farthest_skeleton_pixel(
+    skeleton_pixels: np.ndarray,
+    start_y: int,
+    start_x: int,
+    track_predecessors: bool = False,
+) -> tuple[
+    int,
+    int,
+    float,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    distances = np.full(skeleton_pixels.shape, np.inf, dtype=np.float64)
+    distances[start_y, start_x] = 0.0
+    predecessor_y = None
+    predecessor_x = None
+    if track_predecessors:
+        predecessor_y = np.full(skeleton_pixels.shape, -1, dtype=np.int32)
+        predecessor_x = np.full(skeleton_pixels.shape, -1, dtype=np.int32)
+    queue: list[tuple[float, int, int]] = [(0.0, start_y, start_x)]
+    farthest_y = start_y
+    farthest_x = start_x
+    farthest_distance = 0.0
+    neighbor_steps = (
+        (-1, -1, np.sqrt(2.0)),
+        (-1, 0, 1.0),
+        (-1, 1, np.sqrt(2.0)),
+        (0, -1, 1.0),
+        (0, 1, 1.0),
+        (1, -1, np.sqrt(2.0)),
+        (1, 0, 1.0),
+        (1, 1, np.sqrt(2.0)),
+    )
+    image_height, image_width = skeleton_pixels.shape
+
+    while queue:
+        distance, y, x = heapq.heappop(queue)
+        if distance > distances[y, x]:
+            continue
+        if distance > farthest_distance:
+            farthest_y = y
+            farthest_x = x
+            farthest_distance = distance
+
+        for y_step, x_step, edge_length in neighbor_steps:
+            neighbor_y = y + y_step
+            neighbor_x = x + x_step
+            if (
+                neighbor_y < 0
+                or neighbor_y >= image_height
+                or neighbor_x < 0
+                or neighbor_x >= image_width
+                or not skeleton_pixels[neighbor_y, neighbor_x]
+            ):
+                continue
+            candidate_distance = distance + edge_length
+            if candidate_distance < distances[neighbor_y, neighbor_x]:
+                distances[neighbor_y, neighbor_x] = candidate_distance
+                if track_predecessors:
+                    predecessor_y[neighbor_y, neighbor_x] = y
+                    predecessor_x[neighbor_y, neighbor_x] = x
+                heapq.heappush(
+                    queue,
+                    (candidate_distance, neighbor_y, neighbor_x),
+                )
+
+    return (
+        farthest_y,
+        farthest_x,
+        float(farthest_distance),
+        predecessor_y,
+        predecessor_x,
+    )
+
+
+def _longest_skeleton_path(
+    skeleton_pixels: np.ndarray,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    pixel_count = int(np.count_nonzero(skeleton_pixels))
+    if pixel_count == 0:
+        empty_coordinates = np.empty(0, dtype=np.int32)
+        return 0.0, empty_coordinates, empty_coordinates.copy()
+    if pixel_count == 1:
+        coordinate_y, coordinate_x = np.nonzero(skeleton_pixels)
+        return (
+            1.0,
+            coordinate_y.astype(np.int32),
+            coordinate_x.astype(np.int32),
+        )
+
+    subcomponent_count, subcomponent_labels = cv2.connectedComponents(
+        skeleton_pixels.astype(np.uint8),
+        connectivity=8,
+    )
+    longest_path = 1.0
+    longest_path_y = np.empty(0, dtype=np.int32)
+    longest_path_x = np.empty(0, dtype=np.int32)
+    for subcomponent_id in range(1, subcomponent_count):
+        subcomponent = subcomponent_labels == subcomponent_id
+        coordinates = np.argwhere(subcomponent)
+        start_y, start_x = coordinates[0]
+        farthest_y, farthest_x, _, _, _ = _farthest_skeleton_pixel(
+            subcomponent,
+            int(start_y),
+            int(start_x),
+        )
+        (
+            path_end_y,
+            path_end_x,
+            path_distance,
+            predecessor_y,
+            predecessor_x,
+        ) = _farthest_skeleton_pixel(
+            subcomponent,
+            farthest_y,
+            farthest_x,
+            track_predecessors=True,
+        )
+        candidate_length = path_distance + 1.0
+        if candidate_length < longest_path:
+            continue
+
+        path_y = [path_end_y]
+        path_x = [path_end_x]
+        current_y = path_end_y
+        current_x = path_end_x
+        while (current_y, current_x) != (farthest_y, farthest_x):
+            previous_y = int(predecessor_y[current_y, current_x])
+            previous_x = int(predecessor_x[current_y, current_x])
+            if previous_y < 0 or previous_x < 0:
+                break
+            path_y.append(previous_y)
+            path_x.append(previous_x)
+            current_y = previous_y
+            current_x = previous_x
+
+        longest_path = candidate_length
+        longest_path_y = np.asarray(path_y, dtype=np.int32)
+        longest_path_x = np.asarray(path_x, dtype=np.int32)
+
+    return float(longest_path), longest_path_y, longest_path_x
 
 
 def _orientation_and_linearity(
@@ -192,6 +348,8 @@ def _rotated_dimensions(
     x_coordinates: np.ndarray,
     y_coordinates: np.ndarray,
 ) -> tuple[float, float, float]:
+    if x_coordinates.size == 0:
+        return 0.0, 0.0, 0.0
     if x_coordinates.size == 1:
         return 1.0, 1.0, 1.0
 
@@ -238,6 +396,7 @@ def extract_component_features(
             features=(),
             component_labels=empty_labels,
             retained_component_mask=empty_mask.copy(),
+            longest_path_mask=empty_mask.copy(),
             endpoint_mask=empty_mask.copy(),
             branch_point_mask=empty_mask.copy(),
         )
@@ -271,6 +430,7 @@ def extract_component_features(
 
     features: list[ComponentFeatures] = []
     retained_labels = np.zeros(component_count, dtype=bool)
+    longest_path_pixels = np.zeros(shape, dtype=bool)
     for component_id in range(1, component_count):
         area = int(stats[component_id, cv2.CC_STAT_AREA])
         if area < config.minimum_component_area:
@@ -303,6 +463,14 @@ def extract_component_features(
             global_x,
             global_y,
         )
+        (
+            skeleton_rotated_length,
+            skeleton_rotated_width,
+            skeleton_aspect_ratio,
+        ) = _rotated_dimensions(
+            orientation_x,
+            orientation_y,
+        )
         orientation, linearity = _orientation_and_linearity(
             orientation_x,
             orientation_y,
@@ -320,6 +488,49 @@ def extract_component_features(
         local_branches = (
             branch_pixels[y : y + height, x : x + width]
             & component_pixels
+        )
+        skeleton_pixel_count = int(np.count_nonzero(local_skeleton))
+        skeleton_length = _skeleton_graph_length(local_skeleton)
+        (
+            longest_path_length,
+            longest_path_y,
+            longest_path_x,
+        ) = _longest_skeleton_path(local_skeleton)
+        longest_path_global_x = longest_path_x + x
+        longest_path_global_y = longest_path_y + y
+        longest_path_pixels[
+            longest_path_global_y,
+            longest_path_global_x,
+        ] = True
+        (
+            longest_path_rotated_length,
+            longest_path_rotated_width,
+            longest_path_aspect_ratio,
+        ) = _rotated_dimensions(
+            longest_path_global_x,
+            longest_path_global_y,
+        )
+        _, longest_path_linearity = _orientation_and_linearity(
+            longest_path_global_x,
+            longest_path_global_y,
+        )
+        longest_path_coordinates = tuple(
+            (
+                int(longest_path_global_x[index]),
+                int(longest_path_global_y[index]),
+            )
+            for index in range(longest_path_global_x.size)
+        )
+        branch_point_count = int(np.count_nonzero(local_branches))
+        branch_density = (
+            branch_point_count / skeleton_pixel_count
+            if skeleton_pixel_count
+            else 0.0
+        )
+        path_coverage = (
+            float(np.clip(longest_path_length / skeleton_length, 0.0, 1.0))
+            if skeleton_length > 0.0
+            else 0.0
         )
 
         mean_width = None
@@ -364,10 +575,22 @@ def extract_component_features(
                 rotated_length_pixels=rotated_length,
                 rotated_width_pixels=rotated_width,
                 aspect_ratio=aspect_ratio,
-                skeleton_pixel_count=int(np.count_nonzero(local_skeleton)),
-                skeleton_length_pixels=_skeleton_graph_length(local_skeleton),
+                skeleton_pixel_count=skeleton_pixel_count,
+                skeleton_length_pixels=skeleton_length,
+                skeleton_rotated_length_pixels=skeleton_rotated_length,
+                skeleton_rotated_width_pixels=skeleton_rotated_width,
+                skeleton_aspect_ratio=skeleton_aspect_ratio,
+                longest_path_length_pixels=longest_path_length,
+                longest_path_rotated_length_pixels=(
+                    longest_path_rotated_length
+                ),
+                longest_path_rotated_width_pixels=longest_path_rotated_width,
+                longest_path_aspect_ratio=longest_path_aspect_ratio,
+                longest_path_linearity=longest_path_linearity,
+                branch_density=branch_density,
+                path_coverage=path_coverage,
                 endpoint_count=len(endpoint_coordinates),
-                branch_point_count=int(np.count_nonzero(local_branches)),
+                branch_point_count=branch_point_count,
                 orientation_degrees=orientation,
                 linearity=linearity,
                 mean_width_pixels=mean_width,
@@ -376,11 +599,17 @@ def extract_component_features(
                 max_response=max_response,
                 strong_response_fraction=strong_response_fraction,
                 endpoint_coordinates_xy=endpoint_coordinates,
+                longest_path_coordinates_xy=longest_path_coordinates,
             )
         )
 
     retained_pixels = retained_labels[labels]
     retained_component_mask = np.where(retained_pixels, 255, 0).astype(np.uint8)
+    longest_path_mask = np.where(
+        longest_path_pixels & retained_pixels,
+        255,
+        0,
+    ).astype(np.uint8)
     endpoint_mask = np.where(
         endpoint_pixels & retained_pixels,
         255,
@@ -396,6 +625,7 @@ def extract_component_features(
         features=tuple(features),
         component_labels=labels,
         retained_component_mask=retained_component_mask,
+        longest_path_mask=longest_path_mask,
         endpoint_mask=endpoint_mask,
         branch_point_mask=branch_point_mask,
     )
@@ -426,6 +656,13 @@ def create_feature_overlay(
             (thickness, thickness),
         )
         skeleton_visible = cv2.dilate(skeleton_visible, kernel, iterations=1)
+    longest_path_visible = feature_result.longest_path_mask
+    if config.skeleton_preview_thickness > 1:
+        longest_path_visible = cv2.dilate(
+            longest_path_visible,
+            kernel,
+            iterations=1,
+        )
 
     endpoint_visible = feature_result.endpoint_mask
     branch_visible = feature_result.branch_point_mask
@@ -448,6 +685,7 @@ def create_feature_overlay(
 
     overlay = original_image.copy()
     overlay[skeleton_visible > 0] = (0, 255, 0)
+    overlay[longest_path_visible > 0] = (0, 255, 255)
     overlay[branch_visible > 0] = (255, 0, 0)
     overlay[endpoint_visible > 0] = (0, 0, 255)
     return overlay
@@ -466,6 +704,9 @@ def write_feature_csv(
             row = asdict(feature)
             row["endpoint_coordinates_xy"] = ";".join(
                 f"{x}:{y}" for x, y in feature.endpoint_coordinates_xy
+            )
+            row["longest_path_coordinates_xy"] = ";".join(
+                f"{x}:{y}" for x, y in feature.longest_path_coordinates_xy
             )
             writer.writerow(row)
 
@@ -616,7 +857,7 @@ def main() -> None:
     feature_config = FeatureExtractionConfig(
         enabled=True,
         connectivity=8,
-        minimum_component_area=50,      #面积小于该值的区域不写入特征记录。
+        minimum_component_area=70,      #面积小于该值的区域不写入特征记录。
         calculate_width_features=True,       #使用阈值二值图和距离变换计算平均、最大宽度。
         calculate_response_features=True,       #统计连通域内 Frangi/Gabor 的平均响应、最大响应和强响应比例。
     )

@@ -31,6 +31,11 @@ from Image_enhancement.scratch_detection.modules.morphology import (
     SkeletonizationConfig,
     skeletonize_binary_candidates,
 )
+from Image_enhancement.scratch_detection.modules.features import (
+    FeatureExtractionConfig,
+    FeatureExtractionResult,
+    extract_component_features,
+)
 
 
 LINE_ENHANCEMENT_METHODS = {"frangi", "gabor"}
@@ -40,6 +45,7 @@ FRANGI_RESPONSE_MODES = {"bright", "dark", "combined"}
 @dataclass(frozen=True)
 class ScratchPipelineResult:
     working_image: np.ndarray
+    feature_result: FeatureExtractionResult
     line_response_image: np.ndarray
     threshold_binary_image: np.ndarray
     threshold_low_value: float
@@ -71,6 +77,7 @@ class ScratchDetectionPipeline:
         frangi_config: FrangiConfig,
         threshold_config: HysteresisThresholdConfig,
         skeleton_config: SkeletonizationConfig,
+        feature_config: FeatureExtractionConfig,
         line_enhancement_method: str = "frangi",
         frangi_response_mode: str = "bright",
     ) -> None:
@@ -89,6 +96,7 @@ class ScratchDetectionPipeline:
         self.frangi_config = frangi_config
         self.threshold_config = threshold_config
         self.skeleton_config = skeleton_config
+        self.feature_config = feature_config
         self.line_enhancement_method = line_enhancement_method
         self.frangi_response_mode = frangi_response_mode
 
@@ -149,9 +157,18 @@ class ScratchDetectionPipeline:
             mask_result.eroded_mask,
             self.skeleton_config,
         )
+        feature_result = extract_component_features(
+            threshold_result.binary_image,
+            skeleton_result.skeleton_image,
+            mask_result.eroded_mask,
+            line_response_image,
+            threshold_result.high_threshold,
+            self.feature_config,
+        )
 
         return ScratchPipelineResult(
             working_image=skeleton_result.skeleton_image,
+            feature_result=feature_result,
             line_response_image=line_response_image,
             threshold_binary_image=threshold_result.binary_image,
             threshold_low_value=threshold_result.low_threshold,

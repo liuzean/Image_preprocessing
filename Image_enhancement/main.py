@@ -26,6 +26,9 @@ from Image_enhancement.scratch_detection.modules.threshold import (
 from Image_enhancement.scratch_detection.modules.morphology import (
     SkeletonizationConfig,
 )
+from Image_enhancement.scratch_detection.modules.features import (
+    FeatureExtractionConfig,
+)
 from Image_enhancement.scratch_detection.pipeline import ScratchDetectionPipeline
 
 
@@ -97,6 +100,13 @@ def main() -> None:
         enabled=True,
         method="zhang",
     )
+    feature_config = FeatureExtractionConfig(
+        enabled=True,
+        connectivity=8,
+        minimum_component_area=1,
+        calculate_width_features=True,
+        calculate_response_features=True,
+    )
     pipeline = ScratchDetectionPipeline(
         erode_mask_config,
         background_config,
@@ -104,6 +114,7 @@ def main() -> None:
         frangi_config,
         threshold_config,
         skeleton_config,
+        feature_config,
         line_enhancement_method=line_enhancement_method,
         frangi_response_mode=frangi_response_mode,
     )
