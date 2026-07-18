@@ -29,6 +29,9 @@ from Image_enhancement.scratch_detection.modules.morphology import (
 from Image_enhancement.scratch_detection.modules.features import (
     FeatureExtractionConfig,
 )
+from Image_enhancement.scratch_detection.modules.candidate_filter import (
+    CandidateFilterConfig,
+)
 from Image_enhancement.scratch_detection.pipeline import ScratchDetectionPipeline
 
 
@@ -107,6 +110,13 @@ def main() -> None:
         calculate_width_features=True,
         calculate_response_features=True,
     )
+    candidate_filter_config = CandidateFilterConfig(
+        enabled=True,
+        minimum_path_length=10.0,
+        long_min_path_length=150.0,
+        short_min_longest_path_aspect_ratio=3.0,
+        short_min_linearity=0.30,
+    )
     pipeline = ScratchDetectionPipeline(
         erode_mask_config,
         background_config,
@@ -115,6 +125,7 @@ def main() -> None:
         threshold_config,
         skeleton_config,
         feature_config,
+        candidate_filter_config,
         line_enhancement_method=line_enhancement_method,
         frangi_response_mode=frangi_response_mode,
     )

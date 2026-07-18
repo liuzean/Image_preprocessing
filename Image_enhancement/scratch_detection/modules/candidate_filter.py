@@ -409,10 +409,10 @@ def main() -> None:
     )
     filter_config = CandidateFilterConfig(
         enabled=True,
-        minimum_path_length=10.0,
-        long_min_path_length=150.0,
-        short_min_longest_path_aspect_ratio=3.0,
-        short_min_linearity=0.30,
+        minimum_path_length=10.0,                    #最短连续路径。低于该值的骨架直接排除。
+        long_min_path_length=150.0,                  #长候选分界。，达到该长度后直接保留，不再检查长宽比和弯曲程度。
+        short_min_longest_path_aspect_ratio=3.0,     #短候选骨架最小长宽比。
+        short_min_linearity=0.30,                    #短候选骨架最小线性度。越大，筛选更严格，纹理减少，但划痕更容易断裂。减小：可以连接划痕的浅色部分，但会带入更多纹理。
     )
     preview_config = CandidateFilterPreviewConfig(
         crop_padding=15,

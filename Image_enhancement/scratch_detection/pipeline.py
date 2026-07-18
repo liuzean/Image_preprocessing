@@ -36,6 +36,11 @@ from Image_enhancement.scratch_detection.modules.features import (
     FeatureExtractionResult,
     extract_component_features,
 )
+from Image_enhancement.scratch_detection.modules.candidate_filter import (
+    CandidateFilterConfig,
+    CandidateFilterResult,
+    filter_candidates,
+)
 
 
 LINE_ENHANCEMENT_METHODS = {"frangi", "gabor"}
@@ -46,6 +51,7 @@ FRANGI_RESPONSE_MODES = {"bright", "dark", "combined"}
 class ScratchPipelineResult:
     working_image: np.ndarray
     feature_result: FeatureExtractionResult
+    candidate_filter_result: CandidateFilterResult
     line_response_image: np.ndarray
     threshold_binary_image: np.ndarray
     threshold_low_value: float
@@ -78,6 +84,7 @@ class ScratchDetectionPipeline:
         threshold_config: HysteresisThresholdConfig,
         skeleton_config: SkeletonizationConfig,
         feature_config: FeatureExtractionConfig,
+        candidate_filter_config: CandidateFilterConfig,
         line_enhancement_method: str = "frangi",
         frangi_response_mode: str = "bright",
     ) -> None:
@@ -97,6 +104,7 @@ class ScratchDetectionPipeline:
         self.threshold_config = threshold_config
         self.skeleton_config = skeleton_config
         self.feature_config = feature_config
+        self.candidate_filter_config = candidate_filter_config
         self.line_enhancement_method = line_enhancement_method
         self.frangi_response_mode = frangi_response_mode
 
@@ -165,10 +173,17 @@ class ScratchDetectionPipeline:
             threshold_result.high_threshold,
             self.feature_config,
         )
+        candidate_filter_result = filter_candidates(
+            threshold_result.binary_image,
+            skeleton_result.skeleton_image,
+            feature_result,
+            self.candidate_filter_config,
+        )
 
         return ScratchPipelineResult(
-            working_image=skeleton_result.skeleton_image,
+            working_image=candidate_filter_result.filtered_skeleton_image,
             feature_result=feature_result,
+            candidate_filter_result=candidate_filter_result,
             line_response_image=line_response_image,
             threshold_binary_image=threshold_result.binary_image,
             threshold_low_value=threshold_result.low_threshold,
