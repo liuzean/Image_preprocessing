@@ -863,14 +863,14 @@ def main() -> None:
     )
     linker_config = CandidateLinkerConfig(
         enabled=True,
-        maximum_gap_distance=20.0,
-        direction_window_radius=7,
-        maximum_direction_difference_degrees=20.0,
-        maximum_connection_angle_degrees=25.0,
-        maximum_lateral_offset_pixels=4.0,
-        minimum_gap_response_fraction=0.25,
-        require_mutual_best_match=True,
-        link_thickness=1,
+        maximum_gap_distance=200.0,           #允许连接的最大端点距离，单位为像素。增大可以连接更长断口，但容易错误连接附近花纹。
+        direction_window_radius=7,           #计算端点局部方向时，使用端点周围多少像素范围内的骨架。太小会受单个像素抖动影响，太大会受到弯曲、分支影响。
+        maximum_direction_difference_degrees=20.0,     #两个候选主方向之间允许的最大夹角。越小越要求两段互相平行。
+        maximum_connection_angle_degrees=25.0,         #端点方向与两端点连接线之间允许的最大夹角。用于判断两个端点是否真正面对彼此，而不仅仅是两条平行线。
+        maximum_lateral_offset_pixels=4.0,          #两段骨架允许的最大横向错位。能够阻止相互平行但位于不同轨迹上的花纹被连接。
+        minimum_gap_response_fraction=0.25,    #连接间隙内，Frangi 响应超过滞后阈值低阈值的像素比例。0.25 表示至少 25% 的间隙仍要存在弱线状响应。
+        require_mutual_best_match=True,     #只有两个端点互相都是最佳配对时才连接。关闭后连接数量会增加，但错误连接风险明显上升。
+        link_thickness=1,          #实际写入骨架的连接线宽度。骨架分析建议始终保持 1。
     )
     preview_config = CandidateLinkerPreviewConfig(
         crop_padding=15,

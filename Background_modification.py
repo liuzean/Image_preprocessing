@@ -102,5 +102,5 @@ def main(target_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    TARGET_DIR = Path(r"E:\projects\datasets\Power_box\Power_box_2long")
+    TARGET_DIR = Path(r"E:\projects\datasets\Power_box\old\results")
     main(TARGET_DIR)
