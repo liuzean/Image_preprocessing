@@ -20,7 +20,7 @@ results/
 runs/
 Reference/
 test/
-tests/
+#tests/
 
 *.jpg
 *.jpeg
