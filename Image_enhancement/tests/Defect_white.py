@@ -177,8 +177,8 @@ def object_whitening_alpha(
 def whiten_defects(
     image: np.ndarray,
     objects: list[dict],
-    base_whiten_strength: float,
-    skeleton_gradient_strength: float,
+    base_whiten_strengths: dict[str, float],
+    skeleton_gradient_strengths: dict[str, float],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     height, width = image.shape[:2]
     combined_alpha = np.zeros((height, width), dtype=np.float32)
@@ -186,13 +186,17 @@ def whiten_defects(
     combined_skeleton = np.zeros((height, width), dtype=np.uint8)
 
     for item in objects:
+        category_key = normalize_category(item.get("category"))
+        if category_key not in base_whiten_strengths:
+            continue
+
         mask = object_mask((width, height), item)
         if not np.any(mask):
             continue
         alpha, skeleton_mask = object_whitening_alpha(
             mask,
-            base_whiten_strength,
-            skeleton_gradient_strength,
+            base_whiten_strengths[category_key],
+            skeleton_gradient_strengths[category_key],
         )
         combined_alpha = np.maximum(combined_alpha, alpha)
         combined_mask = cv2.bitwise_or(combined_mask, mask)
@@ -270,6 +274,18 @@ def validate_strength(name: str, value: float) -> None:
         raise ValueError(f"{name} must be between 0.0 and 1.0, got {value}")
 
 
+def validate_category_strengths(name: str, strengths: dict[str, float]) -> None:
+    missing_categories = TARGET_CATEGORY_KEYS - set(strengths)
+    if missing_categories:
+        joined = ", ".join(sorted(missing_categories))
+        raise ValueError(f"{name} is missing category strength(s): {joined}")
+
+    for category_key, value in strengths.items():
+        if category_key not in TARGET_CATEGORY_KEYS:
+            raise ValueError(f"{name} contains unsupported category: {category_key}")
+        validate_strength(f"{name}[{category_key}]", value)
+
+
 def save_rgb(image: np.ndarray, output_path: Path) -> None:
     pil_image = Image.fromarray(image, mode="RGB")
     if output_path.suffix.lower() in {".jpg", ".jpeg"}:
@@ -280,14 +296,17 @@ def save_rgb(image: np.ndarray, output_path: Path) -> None:
 
 def process_dataset(
     source_dir: Path,
-    base_whiten_strength: float,
-    skeleton_gradient_strength: float,
+    base_whiten_strengths: dict[str, float],
+    skeleton_gradient_strengths: dict[str, float],
     enable_red_outline: bool,
     enable_green_skeleton: bool,
     skeleton_visualization_width: int,
 ) -> tuple[int, int, Path]:
-    validate_strength("base_whiten_strength", base_whiten_strength)
-    validate_strength("skeleton_gradient_strength", skeleton_gradient_strength)
+    validate_category_strengths("base_whiten_strengths", base_whiten_strengths)
+    validate_category_strengths(
+        "skeleton_gradient_strengths",
+        skeleton_gradient_strengths,
+    )
     if skeleton_visualization_width < 1:
         raise ValueError("skeleton_visualization_width must be at least 1")
     if not source_dir.is_dir():
@@ -318,8 +337,8 @@ def process_dataset(
         output_image, defect_mask, skeleton_mask = whiten_defects(
             image,
             objects,
-            base_whiten_strength,
-            skeleton_gradient_strength,
+            base_whiten_strengths,
+            skeleton_gradient_strengths,
         )
         if enable_red_outline:
             output_image = draw_expanded_annotation(output_image, defect_mask)
@@ -338,21 +357,34 @@ def process_dataset(
 
 
 if __name__ == "__main__":
-    # 整个 Scratch/Pit 区域的基础增白比例，范围 0.0~1.0。
-    BASE_WHITEN_STRENGTH = 0.30
-    # 骨架处额外增白比例；离骨架越远，该部分增白越弱，范围 0.0~1.0。
-    SKELETON_GRADIENT_STRENGTH = 0.1
-    # True：输出图绘制外扩 5 像素的红框；False：只输出增白结果。
+    # Base whitening strength for the whole defect mask, range 0.0~1.0.
+    SCRATCH_BASE_WHITEN_STRENGTH = 0.30
+    PIT_BASE_WHITEN_STRENGTH = 0.30
+
+    # Extra whitening strength at the skeleton. The effect decays toward mask edges.
+    SCRATCH_SKELETON_GRADIENT_STRENGTH = 0.0
+    PIT_SKELETON_GRADIENT_STRENGTH = 0.2
+
+    BASE_WHITEN_STRENGTHS = {
+        "scratch": SCRATCH_BASE_WHITEN_STRENGTH,
+        "pit": PIT_BASE_WHITEN_STRENGTH,
+    }
+    SKELETON_GRADIENT_STRENGTHS = {
+        "scratch": SCRATCH_SKELETON_GRADIENT_STRENGTH,
+        "pit": PIT_SKELETON_GRADIENT_STRENGTH,
+    }
+
+    # True draws a red outline expanded by 5 pixels around each defect.
     ENABLE_RED_OUTLINE = False
-    # True：在输出图中显示绿色骨架；False：不显示绿色骨架。
-    ENABLE_GREEN_SKELETON = True
-    # 输出图中绿色骨架的宽度，单位为像素，最小值为 1。
+    # True overlays the detected skeleton in green on the output image.
+    ENABLE_GREEN_SKELETON = False
+    # Green skeleton visualization width in pixels. This does not affect whitening.
     SKELETON_VISUALIZATION_WIDTH = 1
 
     processed, skipped, result_dir = process_dataset(
         source_dir=SOURCE_DIR,
-        base_whiten_strength=BASE_WHITEN_STRENGTH,
-        skeleton_gradient_strength=SKELETON_GRADIENT_STRENGTH,
+        base_whiten_strengths=BASE_WHITEN_STRENGTHS,
+        skeleton_gradient_strengths=SKELETON_GRADIENT_STRENGTHS,
         enable_red_outline=ENABLE_RED_OUTLINE,
         enable_green_skeleton=ENABLE_GREEN_SKELETON,
         skeleton_visualization_width=SKELETON_VISUALIZATION_WIDTH,
