@@ -36,6 +36,7 @@ AUGMENTED_NAME_PATTERN = re.compile(
     r"(?:_(?P<flip>vflip|hflip))?$"
 )
 SILVER_BOX_KEY = "silver_box"
+AVOIDED_AREA_KEY = "the_avoided_area"
 
 
 @dataclass(frozen=True)
@@ -221,6 +222,7 @@ def build_augmented_json(
 ) -> dict:
     output_data = copy.deepcopy(source_data)
     silver_box_count = 0
+    avoided_area_count = 0
     for item in output_data.get("objects", []):
         if not isinstance(item, dict):
             continue
@@ -232,12 +234,19 @@ def build_augmented_json(
         )
         if transformed is not None:
             item["segmentation"] = transformed
-        if normalize_category(item.get("category")) == SILVER_BOX_KEY:
+        category = normalize_category(item.get("category"))
+        if category == SILVER_BOX_KEY:
             if transformed is None:
                 raise ValueError(
                     f"Silver box becomes invalid after transforming: {image_path}"
                 )
             silver_box_count += 1
+        elif category == AVOIDED_AREA_KEY:
+            if transformed is None:
+                raise ValueError(
+                    f"The_avoided_area becomes invalid after transforming: {image_path}"
+                )
+            avoided_area_count += 1
     if silver_box_count == 0:
         raise ValueError(f"Source JSON has no Silver box object: {image_path}")
 

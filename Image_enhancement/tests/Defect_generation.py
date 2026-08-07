@@ -12,10 +12,18 @@ from PIL import Image
 
 
 NORMAL_DIR = Path(
-    r"E:\projects\datasets\Power_box\old\results\results\Defective_free"
+    r"E:\projects\datasets\Power_box\old\results\results\Defective_free\11"
 )
 DEFECTIVE_DIR = Path(
-    r"E:\projects\datasets\Power_box\old\results\results"
+    r"E:\projects\datasets\Power_box\old\results\results\Defect_white\10"
+)
+NORMAL_GROUP_DIR_NAMES = (
+    "Power_box_1short",
+    "Power_box_2long",
+    "Power_box_3long",
+    "Power_box_4long",
+    "Power_box_5long",
+    "Power_box_6short",
 )
 DEFECT_CATEGORIES = ("Scratch", "Pit", "Stain")
 SILVER_BOX_KEY = "silver_box"
@@ -94,6 +102,13 @@ class Placement:
     final_mask: np.ndarray
 
 
+@dataclass(frozen=True)
+class NormalCategoryFolder:
+    group_name: str
+    category: str
+    path: Path
+
+
 def normalize_category(value: object) -> str:
     text = str(value).strip().lower().replace(" ", "_")
     return "_".join(part for part in text.split("_") if part)
@@ -125,14 +140,6 @@ def find_image_for_json(json_path: Path) -> Path:
             return candidates[suffix]
 
     raise FileNotFoundError(f"No same-name image found for JSON file: {json_path}")
-
-
-def same_name_image(folder: Path, stem: str) -> Path | None:
-    for suffix in IMAGE_EXTENSIONS:
-        image_path = folder / f"{stem}{suffix}"
-        if image_path.exists():
-            return image_path
-    return None
 
 
 def objects_by_category(data: dict, category_key: str) -> list[dict]:
@@ -205,7 +212,7 @@ def crop_patch(
 
 def extract_defect_patches(
     defective_dir: Path,
-    normal_dir: Path,
+    normal_image_lookup: dict[str, Path],
     padding: int,
 ) -> dict[str, list[DefectPatch]]:
     collected = {category: [] for category in DEFECT_CATEGORIES}
@@ -216,7 +223,7 @@ def extract_defect_patches(
         defective_image = read_rgb(defective_image_path)
         height, width = defective_image.shape[:2]
 
-        paired_normal_path = same_name_image(normal_dir, json_path.stem)
+        paired_normal_path = normal_image_lookup.get(json_path.stem)
         paired_normal = (
             read_rgb(paired_normal_path)
             if paired_normal_path is not None
@@ -560,19 +567,48 @@ def normal_json_files(normal_dir: Path) -> list[Path]:
     return sorted(normal_dir.glob("*.json"))
 
 
-def find_source_annotation_json(defective_dir: Path, stem: str) -> Path:
-    candidates = (
-        defective_dir / f"{stem}.json",
-        defective_dir / "Defective_old" / f"{stem}.json",
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
+def normal_category_folders(normal_root: Path) -> list[NormalCategoryFolder]:
+    folders: list[NormalCategoryFolder] = []
+    for group_name in NORMAL_GROUP_DIR_NAMES:
+        group_dir = normal_root / group_name
+        if not group_dir.is_dir():
+            raise NotADirectoryError(f"Normal group folder does not exist: {group_dir}")
 
-    searched = ", ".join(str(path) for path in candidates)
+        for category in DEFECT_CATEGORIES:
+            category_dir = group_dir / category
+            if not category_dir.is_dir():
+                raise NotADirectoryError(
+                    f"Normal {category} folder does not exist: {category_dir}"
+                )
+            folders.append(
+                NormalCategoryFolder(
+                    group_name=group_name,
+                    category=category,
+                    path=category_dir,
+                )
+            )
+
+    return folders
+
+
+def build_normal_image_lookup(
+    folders: list[NormalCategoryFolder],
+) -> dict[str, Path]:
+    lookup: dict[str, Path] = {}
+    for folder in folders:
+        for json_path in normal_json_files(folder.path):
+            image_path = find_image_for_json(json_path)
+            lookup.setdefault(json_path.stem, image_path)
+    return lookup
+
+
+def find_source_annotation_json(defective_dir: Path, stem: str) -> Path:
+    candidate = defective_dir / f"{stem}.json"
+    if candidate.is_file():
+        return candidate
+
     raise FileNotFoundError(
-        f"No original same-name annotation JSON found for {stem}. "
-        f"The_avoided_area must be read from the original annotations. Searched: {searched}"
+        f"No same-name source annotation JSON found for {stem}: {candidate}"
     )
 
 
@@ -644,14 +680,18 @@ def process_image_for_category(
 
 def process_category(
     category: str,
-    json_files: list[Path],
+    normal_dir: Path,
     bag: DefectBag,
-    defective_dir: Path,
+    source_annotation_dir: Path,
     rng: random.Random,
     max_attempts: int,
     feather_pixels: int,
 ) -> tuple[int, Path]:
-    run_dir = next_run_dir(defective_dir / category)
+    json_files = normal_json_files(normal_dir)
+    if not json_files:
+        raise ValueError(f"No normal JSON files found in: {normal_dir}")
+
+    run_dir = next_run_dir(normal_dir / "results")
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "mask").mkdir(parents=True, exist_ok=True)
 
@@ -659,7 +699,7 @@ def process_category(
     for json_path in json_files:
         image_path = find_image_for_json(json_path)
         source_annotation_path = find_source_annotation_json(
-            defective_dir,
+            source_annotation_dir,
             json_path.stem,
         )
         process_image_for_category(
@@ -685,34 +725,46 @@ def process_all(
     patch_padding: int,
     max_attempts: int,
     feather_pixels: int,
-) -> dict[str, tuple[int, Path]]:
+) -> list[tuple[str, str, int, Path]]:
     if not normal_dir.is_dir():
         raise NotADirectoryError(f"Normal folder does not exist: {normal_dir}")
     if not defective_dir.is_dir():
         raise NotADirectoryError(f"Defective folder does not exist: {defective_dir}")
 
     rng = random.Random(seed)
-    json_files = normal_json_files(normal_dir)
-    if not json_files:
-        raise ValueError(f"No normal JSON files found in: {normal_dir}")
+    normal_folders = normal_category_folders(normal_dir)
+    normal_image_lookup = build_normal_image_lookup(normal_folders)
+    if not normal_image_lookup:
+        raise ValueError(f"No normal image/JSON pairs found under: {normal_dir}")
 
     patches_by_category = extract_defect_patches(
         defective_dir=defective_dir,
-        normal_dir=normal_dir,
+        normal_image_lookup=normal_image_lookup,
         padding=patch_padding,
     )
 
-    results: dict[str, tuple[int, Path]] = {}
-    for category in DEFECT_CATEGORIES:
-        bag = DefectBag.from_patches(patches_by_category[category])
-        results[category] = process_category(
-            category=category,
-            json_files=json_files,
-            bag=bag,
-            defective_dir=defective_dir,
+    bags = {
+        category: DefectBag.from_patches(patches_by_category[category])
+        for category in DEFECT_CATEGORIES
+    }
+    results: list[tuple[str, str, int, Path]] = []
+    for normal_folder in normal_folders:
+        processed, output_dir = process_category(
+            category=normal_folder.category,
+            normal_dir=normal_folder.path,
+            bag=bags[normal_folder.category],
+            source_annotation_dir=defective_dir,
             rng=rng,
             max_attempts=max_attempts,
             feather_pixels=feather_pixels,
+        )
+        results.append(
+            (
+                normal_folder.group_name,
+                normal_folder.category,
+                processed,
+                output_dir,
+            )
         )
     return results
 
@@ -728,15 +780,18 @@ def parse_args() -> argparse.Namespace:
         "--normal-dir",
         type=Path,
         default=NORMAL_DIR,
-        help=f"Folder containing normal same-name images and JSON files. Default: {NORMAL_DIR}",
+        help=(
+            "Root folder containing Power_box_* group folders, each with "
+            f"Pit/Scratch/Stain normal sample folders. Default: {NORMAL_DIR}"
+        ),
     )
     parser.add_argument(
         "--defective-dir",
         type=Path,
         default=DEFECTIVE_DIR,
         help=(
-            "Folder containing initial defective images and JSON files, and the "
-            f"category output folders. Default: {DEFECTIVE_DIR}"
+            "Folder containing initial defective images and same-name JSON files. "
+            f"Default: {DEFECTIVE_DIR}"
         ),
     )
     parser.add_argument(
@@ -779,8 +834,8 @@ def main() -> None:
         max_attempts=args.max_placement_attempts,
         feather_pixels=args.feather_pixels,
     )
-    for category, (count, output_dir) in results.items():
-        print(f"{category}: generated {count} image(s) in {output_dir}")
+    for group_name, category, count, output_dir in results:
+        print(f"{group_name}/{category}: generated {count} image(s) in {output_dir}")
 
 
 if __name__ == "__main__":

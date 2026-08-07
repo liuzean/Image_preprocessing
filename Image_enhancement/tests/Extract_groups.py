@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import argparse
 import random
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -84,12 +84,6 @@ def select_groups(
 
 def reset_group_folder(group_path: Path) -> None:
     group_path.mkdir(parents=False, exist_ok=True)
-    nested_directories = [path for path in group_path.iterdir() if path.is_dir()]
-    if nested_directories:
-        nested = ", ".join(str(path) for path in nested_directories)
-        raise ValueError(
-            f"Refusing to clear group folder containing subdirectories: {nested}"
-        )
     for path in group_path.iterdir():
         if path.is_file() or path.is_symlink():
             path.unlink()
