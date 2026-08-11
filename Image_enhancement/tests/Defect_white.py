@@ -357,13 +357,13 @@ def process_dataset(
 
 
 if __name__ == "__main__":
-    # Base whitening strength for the whole defect mask, range 0.0~1.0.
-    SCRATCH_BASE_WHITEN_STRENGTH = 0.30
-    PIT_BASE_WHITEN_STRENGTH = 0.30
+    # Base whitening strength for the whole defect mask, range 0.0~1.0.基础增白强度，范围0.0~1.0
+    SCRATCH_BASE_WHITEN_STRENGTH = 0.05
+    PIT_BASE_WHITEN_STRENGTH = 0.05
 
     # Extra whitening strength at the skeleton. The effect decays toward mask edges.
-    SCRATCH_SKELETON_GRADIENT_STRENGTH = 0.0
-    PIT_SKELETON_GRADIENT_STRENGTH = 0.2
+    SCRATCH_SKELETON_GRADIENT_STRENGTH = 0.4
+    PIT_SKELETON_GRADIENT_STRENGTH = 0.3
 
     BASE_WHITEN_STRENGTHS = {
         "scratch": SCRATCH_BASE_WHITEN_STRENGTH,

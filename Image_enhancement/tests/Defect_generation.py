@@ -3,20 +3,16 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 import cv2
 import numpy as np
 from PIL import Image
 
 
-NORMAL_DIR = Path(
-    r"E:\projects\datasets\Power_box\old\results\results\Defective_free\11"
-)
-DEFECTIVE_DIR = Path(
-    r"E:\projects\datasets\Power_box\old\results\results\Defect_white\10"
-)
 NORMAL_GROUP_DIR_NAMES = (
     "Power_box_1short",
     "Power_box_2long",
@@ -30,7 +26,8 @@ SILVER_BOX_KEY = "silver_box"
 AVOIDED_AREA_KEY = "the_avoided_area"
 DEFECTS_PER_IMAGE = 3
 MAX_PLACEMENT_ATTEMPTS = 800
-EDGE_FEATHER_PIXELS = 3
+SCRATCH_MIN_FINAL_AREA_RATIO = 1 / 3
+STAIN_MIN_FINAL_AREA_RATIO = 1 / 2
 ANNOTATION_EXPAND_PIXELS = 5
 ANNOTATION_LINE_THICKNESS = 2
 ANNOTATION_COLOR_RGB = (255, 0, 0)
@@ -51,9 +48,11 @@ IMAGE_EXTENSIONS = (
 class DefectPatch:
     category: str
     source_stem: str
+    source_image_name: str
+    source_json_category: object
+    source_json_group: object
     index: int
     rgb_patch: np.ndarray
-    delta_patch: np.ndarray | None
     mask: np.ndarray
 
     @property
@@ -97,7 +96,6 @@ class Placement:
     x: int
     y: int
     rgb_patch: np.ndarray
-    delta_patch: np.ndarray | None
     rotated_mask: np.ndarray
     final_mask: np.ndarray
 
@@ -180,6 +178,26 @@ def build_mask(size: tuple[int, int], objects: list[dict]) -> np.ndarray:
     return mask
 
 
+def inset_mask(mask: np.ndarray, inset_pixels: int) -> np.ndarray:
+    if inset_pixels < 0:
+        raise ValueError("inset_pixels must be non-negative")
+    if inset_pixels == 0:
+        return mask.copy()
+
+    binary = np.where(mask > 0, 1, 0).astype(np.uint8)
+    padded = cv2.copyMakeBorder(
+        binary,
+        1,
+        1,
+        1,
+        1,
+        cv2.BORDER_CONSTANT,
+        value=0,
+    )
+    distance = cv2.distanceTransform(padded, cv2.DIST_L2, 5)[1:-1, 1:-1]
+    return np.where(distance > float(inset_pixels), 255, 0).astype(np.uint8)
+
+
 def mask_bounding_rect(mask: np.ndarray) -> tuple[int, int, int, int] | None:
     points = cv2.findNonZero(mask)
     if points is None:
@@ -212,7 +230,6 @@ def crop_patch(
 
 def extract_defect_patches(
     defective_dir: Path,
-    normal_image_lookup: dict[str, Path],
     padding: int,
 ) -> dict[str, list[DefectPatch]]:
     collected = {category: [] for category in DEFECT_CATEGORIES}
@@ -222,15 +239,6 @@ def extract_defect_patches(
         defective_image_path = find_image_for_json(json_path)
         defective_image = read_rgb(defective_image_path)
         height, width = defective_image.shape[:2]
-
-        paired_normal_path = normal_image_lookup.get(json_path.stem)
-        paired_normal = (
-            read_rgb(paired_normal_path)
-            if paired_normal_path is not None
-            else None
-        )
-        if paired_normal is not None and paired_normal.shape != defective_image.shape:
-            paired_normal = None
 
         category_counts = {category: 0 for category in DEFECT_CATEGORIES}
         for item in data.get("objects", []):
@@ -255,22 +263,16 @@ def extract_defect_patches(
             if not np.any(patch_mask):
                 continue
 
-            delta_patch = None
-            if paired_normal is not None:
-                normal_crop = crop_patch(paired_normal, mask, padding)
-                if normal_crop is not None and normal_crop[0].shape == rgb_patch.shape:
-                    delta_patch = (
-                        rgb_patch.astype(np.int16) - normal_crop[0].astype(np.int16)
-                    )
-
             category_counts[canonical] += 1
             collected[canonical].append(
                 DefectPatch(
                     category=canonical,
                     source_stem=json_path.stem,
+                    source_image_name=defective_image_path.name,
+                    source_json_category=item.get("category"),
+                    source_json_group=item.get("group"),
                     index=category_counts[canonical],
                     rgb_patch=rgb_patch,
-                    delta_patch=delta_patch,
                     mask=patch_mask,
                 )
             )
@@ -295,10 +297,44 @@ def next_run_dir(category_dir: Path) -> Path:
     return category_dir / f"{max_index + 1:02d}"
 
 
+def defect_log_field(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        text = str(value)
+    return text.replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
+
+
+def write_defect_log_header(log_file: TextIO) -> None:
+    log_file.write(
+        "generated_image\tgenerated_defect_number\tsource_image\t"
+        "source_defect_index\tcategory\tgroup\n"
+    )
+
+
+def write_defect_log_rows(
+    log_file: TextIO,
+    generated_image_name: str,
+    patches: list[DefectPatch],
+) -> None:
+    for generated_defect_number, patch in enumerate(patches, start=1):
+        fields = (
+            generated_image_name,
+            generated_defect_number,
+            patch.source_image_name,
+            patch.index,
+            patch.source_json_category,
+            patch.source_json_group,
+        )
+        log_file.write("\t".join(defect_log_field(value) for value in fields) + "\n")
+
+
 def rotate_patch(
     patch: DefectPatch,
     angle_degrees: float,
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     height, width = patch.mask.shape
     center = ((width - 1) * 0.5, (height - 1) * 0.5)
     matrix = cv2.getRotationMatrix2D(center, angle_degrees, 1.0)
@@ -313,7 +349,7 @@ def rotate_patch(
         patch.rgb_patch,
         matrix,
         (new_width, new_height),
-        flags=cv2.INTER_LINEAR,
+        flags=cv2.INTER_NEAREST,
         borderMode=cv2.BORDER_REFLECT_101,
     )
     rotated_mask = cv2.warpAffine(
@@ -324,51 +360,43 @@ def rotate_patch(
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=0,
     )
-    rotated_delta = None
-    if patch.delta_patch is not None:
-        rotated_delta = cv2.warpAffine(
-            patch.delta_patch,
-            matrix,
-            (new_width, new_height),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
-        )
-
     rect = mask_bounding_rect(rotated_mask)
     if rect is None:
-        return rotated_rgb[:0, :0], rotated_delta, rotated_mask[:0, :0]
+        return rotated_rgb[:0, :0], rotated_mask[:0, :0]
 
     x, y, width, height = rect
     cropped_rgb = rotated_rgb[y : y + height, x : x + width].copy()
     cropped_mask = rotated_mask[y : y + height, x : x + width].copy()
-    cropped_delta = (
-        None
-        if rotated_delta is None
-        else rotated_delta[y : y + height, x : x + width].copy()
-    )
-    return cropped_rgb, cropped_delta, cropped_mask
+    return cropped_rgb, cropped_mask
 
 
-def random_top_left(
-    image_width: int,
-    image_height: int,
-    patch_width: int,
-    patch_height: int,
-    category: str,
+def random_valid_top_left(
+    container_mask: np.ndarray,
+    patch_mask: np.ndarray,
     rng: random.Random,
-) -> tuple[int, int]:
-    if category == "Pit":
-        max_x = max(0, image_width - patch_width)
-        max_y = max(0, image_height - patch_height)
-        return rng.randint(0, max_x), rng.randint(0, max_y)
+) -> tuple[int, int] | None:
+    image_height, image_width = container_mask.shape
+    patch_height, patch_width = patch_mask.shape
+    if patch_height > image_height or patch_width > image_width:
+        return None
 
-    min_x = min(0, image_width - patch_width)
-    min_y = min(0, image_height - patch_height)
-    return (
-        rng.randint(min_x, image_width - 1),
-        rng.randint(min_y, image_height - 1),
+    patch_binary = (patch_mask > 0).astype(np.float32)
+    if not np.any(patch_binary):
+        return None
+
+    invalid_binary = (container_mask == 0).astype(np.float32)
+    invalid_overlap = cv2.matchTemplate(
+        invalid_binary,
+        patch_binary,
+        cv2.TM_CCORR,
     )
+    candidate_indices = np.flatnonzero(invalid_overlap < 0.5)
+    if candidate_indices.size == 0:
+        return None
+
+    selected = int(candidate_indices[rng.randrange(candidate_indices.size)])
+    candidate_width = invalid_overlap.shape[1]
+    return selected % candidate_width, selected // candidate_width
 
 
 def paste_mask(
@@ -405,6 +433,7 @@ def paste_mask(
 def find_placement(
     patch: DefectPatch,
     silver_mask: np.ndarray,
+    inset_silver_mask: np.ndarray,
     avoided_mask: np.ndarray,
     used_mask: np.ndarray,
     rng: random.Random,
@@ -414,19 +443,33 @@ def find_placement(
 
     for _ in range(max_attempts):
         angle = rng.uniform(0.0, 360.0)
-        rotated_rgb, rotated_delta, rotated_mask = rotate_patch(patch, angle)
+        rotated_rgb, rotated_mask = rotate_patch(patch, angle)
         if rotated_mask.size == 0:
             continue
 
-        patch_height, patch_width = rotated_mask.shape
-        x, y = random_top_left(
-            image_width,
-            image_height,
-            patch_width,
-            patch_height,
-            patch.category,
+        if patch.category == "Pit":
+            placement_region = np.where(
+                (inset_silver_mask > 0)
+                & (avoided_mask == 0)
+                & (used_mask == 0),
+                255,
+                0,
+            ).astype(np.uint8)
+        else:
+            placement_region = np.where(
+                (silver_mask > 0) & (used_mask == 0),
+                255,
+                0,
+            ).astype(np.uint8)
+
+        top_left = random_valid_top_left(
+            placement_region,
+            rotated_mask,
             rng,
         )
+        if top_left is None:
+            continue
+        x, y = top_left
         pasted = paste_mask((image_height, image_width), rotated_mask, x, y)
         if pasted is None:
             continue
@@ -437,18 +480,21 @@ def find_placement(
             continue
 
         if patch.category == "Pit":
-            if np.any((placed_mask > 0) & (silver_mask == 0)):
-                continue
-            if np.any((placed_mask > 0) & (avoided_mask > 0)):
-                continue
             final_mask = placed_mask
         else:
             final_mask = np.where(
-                (placed_mask > 0) & (silver_mask > 0) & (avoided_mask == 0),
+                (placed_mask > 0)
+                & (inset_silver_mask > 0)
+                & (avoided_mask == 0),
                 255,
                 0,
             ).astype(np.uint8)
-            if np.count_nonzero(final_mask) < original_area / 3.0:
+            min_final_area_ratio = (
+                STAIN_MIN_FINAL_AREA_RATIO
+                if patch.category == "Stain"
+                else SCRATCH_MIN_FINAL_AREA_RATIO
+            )
+            if np.count_nonzero(final_mask) < original_area * min_final_area_ratio:
                 continue
 
         if np.any((final_mask > 0) & (used_mask > 0)):
@@ -459,7 +505,6 @@ def find_placement(
             x=x,
             y=y,
             rgb_patch=rotated_rgb,
-            delta_patch=rotated_delta,
             rotated_mask=rotated_mask,
             final_mask=final_mask,
         )
@@ -470,21 +515,10 @@ def find_placement(
     )
 
 
-def local_mean_color(
-    image: np.ndarray,
-    mask: np.ndarray,
-) -> np.ndarray:
-    pixels = image[mask > 0]
-    if pixels.size == 0:
-        return np.zeros(3, dtype=np.float32)
-    return pixels.astype(np.float32).mean(axis=0)
-
-
 def apply_placement(
     image: np.ndarray,
     placement: Placement,
     output_mask: np.ndarray,
-    feather_pixels: int,
 ) -> None:
     patch_height, patch_width = placement.rotated_mask.shape
     image_height, image_width = output_mask.shape
@@ -504,35 +538,12 @@ def apply_placement(
     if not np.any(local_final_mask):
         return
 
-    target_patch = image[top:bottom, left:right].astype(np.float32)
-    if placement.delta_patch is not None:
-        delta = placement.delta_patch[
-            patch_top:patch_bottom,
-            patch_left:patch_right,
-        ].astype(np.float32)
-        synthetic_patch = np.clip(target_patch + delta, 0, 255)
-    else:
-        source_patch = placement.rgb_patch[
-            patch_top:patch_bottom,
-            patch_left:patch_right,
-        ].astype(np.float32)
-        source_mask = placement.rotated_mask[
-            patch_top:patch_bottom,
-            patch_left:patch_right,
-        ]
-        color_shift = local_mean_color(target_patch.astype(np.uint8), local_final_mask)
-        color_shift -= local_mean_color(source_patch.astype(np.uint8), source_mask)
-        synthetic_patch = np.clip(source_patch + color_shift, 0, 255)
-
-    if feather_pixels <= 0:
-        alpha = (local_final_mask > 0).astype(np.float32)
-    else:
-        distance = cv2.distanceTransform(local_final_mask, cv2.DIST_L2, 5)
-        alpha = np.clip(distance / float(feather_pixels), 0.0, 1.0)
-    alpha = alpha[:, :, None]
-
-    blended = target_patch * (1.0 - alpha) + synthetic_patch * alpha
-    image[top:bottom, left:right] = np.clip(blended, 0, 255).astype(np.uint8)
+    source_patch = placement.rgb_patch[
+        patch_top:patch_bottom,
+        patch_left:patch_right,
+    ]
+    target_patch = image[top:bottom, left:right]
+    target_patch[local_final_mask > 0] = source_patch[local_final_mask > 0]
     output_mask_patch = output_mask[top:bottom, left:right]
     output_mask_patch[local_final_mask > 0] = 255
 
@@ -563,6 +574,20 @@ def draw_expanded_defect_annotation(image: np.ndarray, mask: np.ndarray) -> np.n
     return annotated
 
 
+def red_contour_enabled_for_category(
+    category: str,
+    enable_pit_red_contour: bool,
+    enable_scratch_red_contour: bool,
+    enable_stain_red_contour: bool,
+) -> bool:
+    category_key = normalize_category(category)
+    return {
+        "pit": enable_pit_red_contour,
+        "scratch": enable_scratch_red_contour,
+        "stain": enable_stain_red_contour,
+    }.get(category_key, False)
+
+
 def normal_json_files(normal_dir: Path) -> list[Path]:
     return sorted(normal_dir.glob("*.json"))
 
@@ -591,56 +616,37 @@ def normal_category_folders(normal_root: Path) -> list[NormalCategoryFolder]:
     return folders
 
 
-def build_normal_image_lookup(
-    folders: list[NormalCategoryFolder],
-) -> dict[str, Path]:
-    lookup: dict[str, Path] = {}
-    for folder in folders:
-        for json_path in normal_json_files(folder.path):
-            image_path = find_image_for_json(json_path)
-            lookup.setdefault(json_path.stem, image_path)
-    return lookup
-
-
-def find_source_annotation_json(defective_dir: Path, stem: str) -> Path:
-    candidate = defective_dir / f"{stem}.json"
-    if candidate.is_file():
-        return candidate
-
-    raise FileNotFoundError(
-        f"No same-name source annotation JSON found for {stem}: {candidate}"
-    )
-
-
 def process_image_for_category(
     json_path: Path,
-    source_annotation_path: Path,
     image_path: Path,
     category: str,
     bag: DefectBag,
     output_dir: Path,
     rng: random.Random,
     max_attempts: int,
-    feather_pixels: int,
-) -> None:
+    silver_box_inset_pixels: int,
+    enable_pit_red_contour: bool,
+    enable_scratch_red_contour: bool,
+    enable_stain_red_contour: bool,
+) -> list[DefectPatch]:
     normal_data = read_json(json_path)
-    source_data = read_json(source_annotation_path)
     image = read_rgb(image_path)
     height, width = image.shape[:2]
 
     silver_objects = objects_by_category(normal_data, SILVER_BOX_KEY)
-    if not silver_objects:
-        silver_objects = objects_by_category(source_data, SILVER_BOX_KEY)
     silver_mask = build_mask((width, height), silver_objects)
     if not np.any(silver_mask):
+        raise ValueError(f"No valid Silver box mask found in {json_path}")
+    inset_silver_mask = inset_mask(silver_mask, silver_box_inset_pixels)
+    if not np.any(inset_silver_mask):
         raise ValueError(
-            f"No valid Silver box mask found in {json_path} or "
-            f"{source_annotation_path}"
+            f"Silver box becomes empty after a {silver_box_inset_pixels}-pixel "
+            f"inset in {json_path}"
         )
 
     avoided_mask = build_mask(
         (width, height),
-        objects_by_category(source_data, AVOIDED_AREA_KEY),
+        objects_by_category(normal_data, AVOIDED_AREA_KEY),
     )
     output_mask = np.zeros((height, width), dtype=np.uint8)
 
@@ -649,6 +655,7 @@ def process_image_for_category(
         placement = find_placement(
             patch=patch,
             silver_mask=silver_mask,
+            inset_silver_mask=inset_silver_mask,
             avoided_mask=avoided_mask,
             used_mask=output_mask,
             rng=rng,
@@ -658,7 +665,6 @@ def process_image_for_category(
             image=image,
             placement=placement,
             output_mask=output_mask,
-            feather_pixels=feather_pixels,
         )
 
     avoided_overlap = int(
@@ -673,19 +679,33 @@ def process_image_for_category(
     output_dir.mkdir(parents=True, exist_ok=True)
     mask_dir = output_dir / "mask"
     mask_dir.mkdir(parents=True, exist_ok=True)
-    annotated_image = draw_expanded_defect_annotation(image, output_mask)
-    Image.fromarray(annotated_image).save(output_dir / image_path.name)
+    Image.fromarray(image).save(output_dir / image_path.name)
     Image.fromarray(output_mask).save(mask_dir / image_path.name)
+
+    if red_contour_enabled_for_category(
+        category,
+        enable_pit_red_contour,
+        enable_scratch_red_contour,
+        enable_stain_red_contour,
+    ):
+        red_contour_dir = output_dir / f"{category}_red_contour"
+        red_contour_dir.mkdir(parents=True, exist_ok=True)
+        annotated_image = draw_expanded_defect_annotation(image, output_mask)
+        Image.fromarray(annotated_image).save(red_contour_dir / image_path.name)
+    return selected_patches
 
 
 def process_category(
     category: str,
     normal_dir: Path,
     bag: DefectBag,
-    source_annotation_dir: Path,
     rng: random.Random,
     max_attempts: int,
-    feather_pixels: int,
+    silver_box_inset_pixels: int,
+    enable_pit_red_contour: bool,
+    enable_scratch_red_contour: bool,
+    enable_stain_red_contour: bool,
+    enable_txt_log: bool,
 ) -> tuple[int, Path]:
     json_files = normal_json_files(normal_dir)
     if not json_files:
@@ -696,24 +716,45 @@ def process_category(
     (run_dir / "mask").mkdir(parents=True, exist_ok=True)
 
     processed = 0
-    for json_path in json_files:
-        image_path = find_image_for_json(json_path)
-        source_annotation_path = find_source_annotation_json(
-            source_annotation_dir,
-            json_path.stem,
-        )
-        process_image_for_category(
-            json_path=json_path,
-            source_annotation_path=source_annotation_path,
-            image_path=image_path,
-            category=category,
-            bag=bag,
-            output_dir=run_dir,
-            rng=rng,
-            max_attempts=max_attempts,
-            feather_pixels=feather_pixels,
-        )
-        processed += 1
+    if enable_txt_log:
+        log_path = run_dir / f"{normal_dir.name}.txt"
+        with log_path.open("w", encoding="utf-8", newline="") as log_file:
+            write_defect_log_header(log_file)
+            for json_path in json_files:
+                image_path = find_image_for_json(json_path)
+                selected_patches = process_image_for_category(
+                    json_path=json_path,
+                    image_path=image_path,
+                    category=category,
+                    bag=bag,
+                    output_dir=run_dir,
+                    rng=rng,
+                    max_attempts=max_attempts,
+                    silver_box_inset_pixels=silver_box_inset_pixels,
+                    enable_pit_red_contour=enable_pit_red_contour,
+                    enable_scratch_red_contour=enable_scratch_red_contour,
+                    enable_stain_red_contour=enable_stain_red_contour,
+                )
+                write_defect_log_rows(log_file, image_path.name, selected_patches)
+                log_file.flush()
+                processed += 1
+    else:
+        for json_path in json_files:
+            image_path = find_image_for_json(json_path)
+            process_image_for_category(
+                json_path=json_path,
+                image_path=image_path,
+                category=category,
+                bag=bag,
+                output_dir=run_dir,
+                rng=rng,
+                max_attempts=max_attempts,
+                silver_box_inset_pixels=silver_box_inset_pixels,
+                enable_pit_red_contour=enable_pit_red_contour,
+                enable_scratch_red_contour=enable_scratch_red_contour,
+                enable_stain_red_contour=enable_stain_red_contour,
+            )
+            processed += 1
 
     return processed, run_dir
 
@@ -724,7 +765,11 @@ def process_all(
     seed: int | None,
     patch_padding: int,
     max_attempts: int,
-    feather_pixels: int,
+    silver_box_inset_pixels: int,
+    enable_pit_red_contour: bool,
+    enable_scratch_red_contour: bool,
+    enable_stain_red_contour: bool,
+    enable_txt_log: bool,
 ) -> list[tuple[str, str, int, Path]]:
     if not normal_dir.is_dir():
         raise NotADirectoryError(f"Normal folder does not exist: {normal_dir}")
@@ -733,13 +778,9 @@ def process_all(
 
     rng = random.Random(seed)
     normal_folders = normal_category_folders(normal_dir)
-    normal_image_lookup = build_normal_image_lookup(normal_folders)
-    if not normal_image_lookup:
-        raise ValueError(f"No normal image/JSON pairs found under: {normal_dir}")
 
     patches_by_category = extract_defect_patches(
         defective_dir=defective_dir,
-        normal_image_lookup=normal_image_lookup,
         padding=patch_padding,
     )
 
@@ -753,10 +794,13 @@ def process_all(
             category=normal_folder.category,
             normal_dir=normal_folder.path,
             bag=bags[normal_folder.category],
-            source_annotation_dir=defective_dir,
             rng=rng,
             max_attempts=max_attempts,
-            feather_pixels=feather_pixels,
+            silver_box_inset_pixels=silver_box_inset_pixels,
+            enable_pit_red_contour=enable_pit_red_contour,
+            enable_scratch_red_contour=enable_scratch_red_contour,
+            enable_stain_red_contour=enable_stain_red_contour,
+            enable_txt_log=enable_txt_log,
         )
         results.append(
             (
@@ -769,7 +813,10 @@ def process_all(
     return results
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(
+    default_normal_dir: Path,
+    default_defective_dir: Path,
+) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Generate augmented Scratch, Pit, and Stain samples from normal "
@@ -779,19 +826,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--normal-dir",
         type=Path,
-        default=NORMAL_DIR,
+        default=default_normal_dir,
         help=(
             "Root folder containing Power_box_* group folders, each with "
-            f"Pit/Scratch/Stain normal sample folders. Default: {NORMAL_DIR}"
+            "Pit/Scratch/Stain normal sample folders. "
+            f"Default: {default_normal_dir}"
         ),
     )
     parser.add_argument(
         "--defective-dir",
         type=Path,
-        default=DEFECTIVE_DIR,
+        default=default_defective_dir,
         help=(
             "Folder containing initial defective images and same-name JSON files. "
-            f"Default: {DEFECTIVE_DIR}"
+            f"Default: {default_defective_dir}"
         ),
     )
     parser.add_argument(
@@ -816,27 +864,68 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--feather-pixels",
-        type=int,
-        default=EDGE_FEATHER_PIXELS,
-        help=f"Boundary feather width when applying defects. Default: {EDGE_FEATHER_PIXELS}",
+        "--enable-txt-log",
+        dest="enable_txt_log",
+        action="store_true",
+        help="Enable generation of the defect txt log file.",
     )
+    parser.add_argument(
+        "--disable-txt-log",
+        dest="enable_txt_log",
+        action="store_false",
+        help="Disable generation of the defect txt log file.",
+    )
+    parser.set_defaults(enable_txt_log=True)
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+def main(
+    normal_dir: Path,
+    defective_dir: Path,
+    silver_box_inset_pixels: int,
+    enable_pit_red_contour: bool,
+    enable_scratch_red_contour: bool,
+    enable_stain_red_contour: bool,
+    enable_txt_log: bool,
+) -> None:
+    args = parse_args(normal_dir, defective_dir)
+    start_time = time.perf_counter()
     results = process_all(
         normal_dir=args.normal_dir,
         defective_dir=args.defective_dir,
         seed=args.seed,
         patch_padding=args.patch_padding,
         max_attempts=args.max_placement_attempts,
-        feather_pixels=args.feather_pixels,
+        silver_box_inset_pixels=silver_box_inset_pixels,
+        enable_pit_red_contour=enable_pit_red_contour,
+        enable_scratch_red_contour=enable_scratch_red_contour,
+        enable_stain_red_contour=enable_stain_red_contour,
+        enable_txt_log=args.enable_txt_log and enable_txt_log,
     )
+    elapsed_seconds = time.perf_counter() - start_time
     for group_name, category, count, output_dir in results:
         print(f"{group_name}/{category}: generated {count} image(s) in {output_dir}")
+    print(f"Total runtime: {elapsed_seconds:.2f} s")
 
 
 if __name__ == "__main__":
-    main()
+    NORMAL_DIR = Path(
+        r"E:\projects\datasets\Power_box\old\results\results\Defective_free\11"
+    )
+    DEFECTIVE_DIR = Path(
+        r"E:\projects\datasets\Power_box\old\results\results\Defect_white\30"
+    )
+    SILVER_BOX_INSET_PIXELS = 10
+    ENABLE_PIT_RED_CONTOUR = False
+    ENABLE_SCRATCH_RED_CONTOUR = False
+    ENABLE_STAIN_RED_CONTOUR = False
+    ENABLE_TXT_LOG = True            #控制是否生成txt日志文件，True为生成，False为不生成
+    main(
+        normal_dir=NORMAL_DIR,
+        defective_dir=DEFECTIVE_DIR,
+        silver_box_inset_pixels=SILVER_BOX_INSET_PIXELS,
+        enable_pit_red_contour=ENABLE_PIT_RED_CONTOUR,
+        enable_scratch_red_contour=ENABLE_SCRATCH_RED_CONTOUR,
+        enable_stain_red_contour=ENABLE_STAIN_RED_CONTOUR,
+        enable_txt_log=ENABLE_TXT_LOG,
+    )
